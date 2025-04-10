@@ -1,5 +1,5 @@
 dependencies = [
-    "discord-py>=2.5.2",
+    "py-cord>=2.5.2",
     "groq>=0.22.0",
     "python-dotenv>=1.1.0",
     "google-search-results>=2.0.0"
