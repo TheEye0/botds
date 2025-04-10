@@ -143,7 +143,7 @@ def run_server():
 # ------ Início da aplicação ------
 if __name__ == "__main__":
     # Inicia o servidor Flask em uma thread
-    threading.Thread(target=run_server).start()
+    Thread(target=run_server).start()
 
 
 # Roda o bot
