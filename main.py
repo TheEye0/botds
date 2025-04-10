@@ -125,6 +125,23 @@ async def search(ctx, *, consulta=None):
         print(f"Erro: {e}")
         await ctx.send("❌ Ocorreu um erro ao processar sua busca com IA.")
 
+# ------ Servidor Flask ------
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is online!"
+
+def run_server():
+    # O Render define a porta na variável de ambiente PORT
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+# ------ Início da aplicação ------
+if __name__ == "__main__":
+    # Inicia o servidor Flask em uma thread
+    threading.Thread(target=run_server).start()
+
 
 # Roda o bot
 bot.run(DISCORD_TOKEN)
