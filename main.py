@@ -1,8 +1,9 @@
 ALLOWED_GUILD_ID = 692143509259419719
 ALLOWED_USER_ID = 367664282990804992
 
-
-from discord.ext import commands import discord import os
+import discord
+from discord.ext import commands
+import os
 from groq import Groq
 from dotenv import load_dotenv
 from serpapi import GoogleSearch
