@@ -9,8 +9,9 @@ from dotenv import load_dotenv
 from serpapi import GoogleSearch
 from flask import Flask
 from threading import Thread
+from collections import defaultdict, deque
 
-
+conversas = defaultdict(lambda: deque(maxlen=10))
 
 load_dotenv()
 
@@ -66,63 +67,69 @@ def autorizado(ctx):
     return False
 
 @bot.command()
-async def ask(ctx, *, pergunta=None):
+async def ask(ctx, *, pergunta):
     if not autorizado(ctx):
         return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado.")
 
-    if not pergunta:
-        return await ctx.send("❗ Você precisa escrever uma pergunta depois do comando `!ask`.")
+    canal_id = ctx.channel.id
+    historico = conversas[canal_id]
+
+    # Adiciona a nova pergunta ao histórico
+    historico.append({"role": "user", "content": pergunta})
+
+    mensagens = [{"role": "system", "content": "Você é um assistente útil e simpático."}] + list(historico)
 
     try:
         response = groq_client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[
-                {"role": "user", "content": pergunta}
-            ]
+            messages=mensagens
         )
         resposta = response.choices[0].message.content
 
-        # Quebra a resposta se for muito grande
-        partes = [resposta[i:i+2000] for i in range(0, len(resposta), 2000)]
-        for parte in partes:
-            await ctx.send(parte)
+        # Salva a resposta no histórico
+        historico.append({"role": "assistant", "content": resposta})
+
+        await ctx.send(resposta)
 
     except Exception as e:
         print(f"Erro: {e}")
         await ctx.send("❌ Ocorreu um erro ao processar sua pergunta.")
 
 @bot.command()
-async def search(ctx, *, consulta=None):
+async def search(ctx, *, consulta):
     if not autorizado(ctx):
         return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado.")
 
-    if not consulta:
-        return await ctx.send("❗ Você precisa escrever uma busca depois do comando `!search`.")
-
     await ctx.send("🔎 Buscando na internet...")
+
     dados = buscar_na_web(consulta)
 
+    canal_id = ctx.channel.id
+    historico = conversas[canal_id]
+
     prompt = f"""
-    Você é um assistente inteligente. Um usuário fez a seguinte pergunta: \"{consulta}\".
-    Pesquisei na internet e encontrei essas informações:
+    Um usuário fez a seguinte pergunta: \"{consulta}\".
+    Aqui estão os resultados da pesquisa online:
 
     {dados}
 
-    Com base nisso, dê uma resposta clara, útil e direta:
+    Responda de forma clara, útil e direta com base nesses dados:
     """
+
+    historico.append({"role": "user", "content": prompt})
+
+    mensagens = [{"role": "system", "content": "Você é um assistente inteligente e útil."}] + list(historico)
 
     try:
         response = groq_client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=mensagens
         )
         resposta = response.choices[0].message.content
 
-        partes = [resposta[i:i+2000] for i in range(0, len(resposta), 2000)]
-        for parte in partes:
-            await ctx.send(parte)
+        historico.append({"role": "assistant", "content": resposta})
+
+        await ctx.send(resposta)
 
     except Exception as e:
         print(f"Erro: {e}")
