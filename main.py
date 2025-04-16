@@ -1,5 +1,6 @@
 ALLOWED_GUILD_ID = 692143509259419719
 ALLOWED_USER_ID = 367664282990804992
+CANAL_DESTINO_ID = 1359260714551873698  # Substitua pelo ID do canal desejado
 
 import discord
 from discord.ext import commands
@@ -10,6 +11,9 @@ from serpapi import GoogleSearch
 from flask import Flask
 from threading import Thread
 from collections import defaultdict, deque
+import datetime
+import asyncio
+from discord.ext import tasks
 
 conversas = defaultdict(lambda: deque(maxlen=10))
 
@@ -51,6 +55,7 @@ def buscar_na_web(consulta):
         return "\n".join(respostas) if respostas else "Nenhum resultado encontrado."
     except Exception as e:
         return f"Erro ao buscar na web: {e}"
+
 
 @bot.event
 async def on_ready():
@@ -135,6 +140,57 @@ async def search(ctx, *, consulta):
         print(f"Erro: {e}")
         await ctx.send("❌ Ocorreu um erro ao processar sua busca com IA.")
 
+
+@tasks.loop(minutes=1)
+async def enviar_conteudo_diario():
+    agora = datetime.datetime.now()
+    if agora.hour == 9 and agora.minute == 0:
+        canal = bot.get_channel(CANAL_DESTINO_ID)
+        if canal:
+            conteudo = await gerar_conteudo_com_ia()
+            await canal.send(conteudo)
+        await asyncio.sleep(60)  # Evita múltiplos envios às 09:00
+
+@enviar_conteudo_diario.before_loop
+async def before():
+    await bot.wait_until_ready()
+
+
+async def gerar_conteudo_com_ia():
+    prompt = """
+Crie duas coisas para um canal de aprendizado:
+
+1. Uma palavra em inglês com:
+- Significado
+- Um exemplo de frase em inglês (com tradução).
+
+2. Uma frase estoica com:
+- Autor (se souber)
+- Pequena explicação/reflexão em português.
+
+Formato:
+Palavra: ...
+Significado: ...
+Exemplo: ...
+Tradução: ...
+
+Frase estoica: "..."
+Autor: ...
+Reflexão: ...
+"""
+
+    try:
+        response = groq_client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[
+                {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, escrevendo para um canal no Discord."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"❌ Erro ao gerar conteúdo diário: {e}"
+
 # ------ Servidor Flask ------
 app = Flask(__name__)
 
@@ -151,6 +207,7 @@ def run_server():
 if __name__ == "__main__":
     # Inicia o servidor Flask em uma thread
     Thread(target=run_server).start()
+    enviar_conteudo_diario.start()
 
 
 # Roda o bot
