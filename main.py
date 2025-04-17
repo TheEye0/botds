@@ -15,6 +15,7 @@ import datetime
 import asyncio
 from discord.ext import tasks
 import json
+import re
 
 conversas = defaultdict(lambda: deque(maxlen=10))
 
@@ -211,27 +212,25 @@ Reflexão: ...
             )
             conteudo = response.choices[0].message.content
 
-            # Verifica se já foi usado
-            palavra_linha = next((l for l in conteudo.splitlines() if l.lower().startswith("palavra:")), "")
-            frase_linha = next((l for l in conteudo.splitlines() if l.lower().startswith("frase estoica:")), "")
+           # Tenta extrair com regex (mais tolerante a variações de formatação)
+match_palavra = re.search(r"(?i)^palavra:\s*(.+)", conteudo, re.MULTILINE)
+match_frase = re.search(r"(?i)^frase estoica:\s*\"?(.+?)\"?", conteudo, re.MULTILINE)
 
-            palavra = palavra_linha.replace("Palavra:", "").strip()
-            frase = frase_linha.replace("Frase estoica:", "").strip().strip('"')
+if match_palavra and match_frase:
+    palavra = match_palavra.group(1).strip()
+    frase = match_frase.group(1).strip()
 
-            if palavra not in historico["palavras"] and frase not in historico["frases"]:
-                # Atualiza o histórico
-                historico["palavras"].append(palavra)
-                historico["frases"].append(frase)
+    if palavra not in historico["palavras"] and frase not in historico["frases"]:
+        historico["palavras"].append(palavra)
+        historico["frases"].append(frase)
 
-                with open("historico.json", "w", encoding="utf-8") as f:
-                    json.dump(historico, f, indent=2, ensure_ascii=False)
+        with open("historico.json", "w", encoding="utf-8") as f:
+            json.dump(historico, f, indent=2, ensure_ascii=False)
 
-                return conteudo
-
-        except Exception as e:
-            return f"❌ Erro ao gerar conteúdo diário: {e}"
-
-    return "⚠️ Não foi possível gerar um conteúdo inédito após 10 tentativas."
+        return conteudo
+else:
+    print("⚠️ Não foi possível extrair a palavra ou frase do conteúdo gerado:")
+    print(conteudo)
 
 
 # ------ Servidor Flask ------
