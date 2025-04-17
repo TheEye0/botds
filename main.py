@@ -212,25 +212,38 @@ Reflexão: ...
             )
             conteudo = response.choices[0].message.content
 
-           # Tenta extrair com regex (mais tolerante a variações de formatação)
-match_palavra = re.search(r"(?i)^palavra:\s*(.+)", conteudo, re.MULTILINE)
-match_frase = re.search(r"(?i)^frase estoica:\s*\"?(.+?)\"?", conteudo, re.MULTILINE)
+          try:
+    response = groq_client.chat.completions.create(
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[
+            {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, escrevendo para um canal no Discord."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    conteudo = response.choices[0].message.content
 
-if match_palavra and match_frase:
-    palavra = match_palavra.group(1).strip()
-    frase = match_frase.group(1).strip()
+    # Tenta extrair com regex (mais tolerante a variações de formatação)
+    match_palavra = re.search(r"(?i)^palavra:\s*(.+)", conteudo, re.MULTILINE)
+    match_frase = re.search(r"(?i)^frase estoica:\s*\"?(.+?)\"?", conteudo, re.MULTILINE)
 
-    if palavra not in historico["palavras"] and frase not in historico["frases"]:
-        historico["palavras"].append(palavra)
-        historico["frases"].append(frase)
+    if match_palavra and match_frase:
+        palavra = match_palavra.group(1).strip()
+        frase = match_frase.group(1).strip()
 
-        with open("historico.json", "w", encoding="utf-8") as f:
-            json.dump(historico, f, indent=2, ensure_ascii=False)
+        if palavra not in historico["palavras"] and frase not in historico["frases"]:
+            historico["palavras"].append(palavra)
+            historico["frases"].append(frase)
 
-        return conteudo
-else:
-    print("⚠️ Não foi possível extrair a palavra ou frase do conteúdo gerado:")
-    print(conteudo)
+            with open("historico.json", "w", encoding="utf-8") as f:
+                json.dump(historico, f, indent=2, ensure_ascii=False)
+
+            return conteudo
+    else:
+        print("⚠️ Não foi possível extrair a palavra ou frase do conteúdo gerado:")
+        print(conteudo)
+
+except Exception as e:
+    return f"❌ Erro ao gerar conteúdo diário: {e}"
 
 
 # ------ Servidor Flask ------
