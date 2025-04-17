@@ -87,7 +87,7 @@ async def ask(ctx, *, pergunta):
 
     try:
         response = groq_client.chat.completions.create(
-            model="deepseek-ai/deepseek-llm-r1-distill-70b",
+            model="deepseek-r1-distill-llama-70b",
             messages=mensagens
         )
         resposta = response.choices[0].message.content
@@ -128,7 +128,7 @@ async def search(ctx, *, consulta):
 
     try:
         response = groq_client.chat.completions.create(
-            model="deepseek-ai/deepseek-llm-r1-distill-70b",
+            model="deepseek-r1-distill-llama-70b",
             messages=mensagens
         )
         resposta = response.choices[0].message.content
@@ -203,7 +203,7 @@ Reflexão: ...
 """
         try:
             response = groq_client.chat.completions.create(
-                model="deepseek-ai/deepseek-llm-r1-distill-70b",
+                model="deepseek-r1-distill-llama-70b",
                 messages=[
                     {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, escrevendo para um canal no Discord."},
                     {"role": "user", "content": prompt}
