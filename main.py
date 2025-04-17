@@ -179,7 +179,7 @@ async def gerar_conteudo_com_ia():
     except (FileNotFoundError, json.JSONDecodeError):
         historico = {"palavras": [], "frases": []}
 
-    for _ in range(5):  # tenta gerar algo novo até 5 vezes
+    for _ in range(10):  # tenta gerar algo novo até 10 vezes
         prompt = """
 Crie duas coisas para um canal de aprendizado:
 
@@ -231,7 +231,7 @@ Reflexão: ...
         except Exception as e:
             return f"❌ Erro ao gerar conteúdo diário: {e}"
 
-    return "⚠️ Não foi possível gerar um conteúdo inédito após 5 tentativas."
+    return "⚠️ Não foi possível gerar um conteúdo inédito após 10 tentativas."
 
 
 # ------ Servidor Flask ------
