@@ -171,6 +171,7 @@ async def before():
 
 
 async def gerar_conteudo_com_ia():
+    global historico_palavras, historico_frases  # <-- necessário para modificar os sets globais
     prompt_palavra = """
 Crie uma palavra em inglês com:
 - Definição em português
