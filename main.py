@@ -141,6 +141,20 @@ async def search(ctx, *, consulta):
         await ctx.send("❌ Ocorreu um erro ao processar sua busca com IA.")
 
 
+@bot.command()
+async def testar_conteudo(ctx):
+    if not autorizado(ctx):
+        return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado.")
+
+    conteudo = await gerar_conteudo_com_ia()
+    await ctx.send(conteudo)
+
+
+# Armazena histórico para evitar repetições
+historico_palavras = set()
+historico_frases = set()
+
+
 @tasks.loop(minutes=1)
 async def enviar_conteudo_diario():
     agora = datetime.datetime.now()
@@ -157,37 +171,64 @@ async def before():
 
 
 async def gerar_conteudo_com_ia():
-    prompt = """
-Crie duas coisas para um canal de aprendizado:
-
-1. Uma palavra em inglês com:
-- Significado
-- Um exemplo de frase em inglês (com tradução).
-
-2. Uma frase estoica com:
-- Autor (se souber)
-- Pequena explicação/reflexão em português.
+    prompt_palavra = """
+Crie uma palavra em inglês com:
+- Definição em português
+- Um exemplo de frase em inglês com tradução
 
 Formato:
 Palavra: ...
 Significado: ...
 Exemplo: ...
 Tradução: ...
+"""
+    prompt_frase = """
+Crie uma frase estoica com:
+- Autor (se souber)
+- Explicação/reflexão sobre a frase
 
+Formato:
 Frase estoica: "..."
 Autor: ...
 Reflexão: ...
 """
 
     try:
-        response = groq_client.chat.completions.create(
+        resposta_palavra = groq_client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
-                {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, escrevendo para um canal no Discord."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "Você é um professor de inglês escrevendo para um canal do Discord."},
+                {"role": "user", "content": prompt_palavra}
             ]
+        ).choices[0].message.content.strip()
+
+        resposta_frase = groq_client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[
+                {"role": "system", "content": "Você é um filósofo estoico que compartilha frases com reflexão para um canal do Discord."},
+                {"role": "user", "content": prompt_frase}
+            ]
+        ).choices[0].message.content.strip()
+
+        # Verifica repetições
+        if resposta_palavra in historico_palavras or resposta_frase in historico_frases:
+            return "⏳ Aguarde um momento. O conteúdo de hoje ainda está sendo preparado!"
+
+        # Adiciona ao histórico para evitar repetições futuras
+        historico_palavras.add(resposta_palavra)
+        historico_frases.add(resposta_frase)
+
+        # Formatação final para o Discord com negritos e espaçamentos
+        mensagem_formatada = (
+            "📚 **Palavra do Dia**\n\n"
+            f"{resposta_palavra}\n\n"
+            "🧘‍♂️ **Frase Estoica do Dia**\n\n"
+            f"{resposta_frase}\n\n"
+            "_Espero que isso inspire seu dia com aprendizado e reflexão._"
         )
-        return response.choices[0].message.content
+
+        return mensagem_formatada
+
     except Exception as e:
         return f"❌ Erro ao gerar conteúdo diário: {e}"
 
