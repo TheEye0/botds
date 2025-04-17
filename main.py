@@ -14,6 +14,7 @@ from collections import defaultdict, deque
 import datetime
 import asyncio
 from discord.ext import tasks
+import json
 
 conversas = defaultdict(lambda: deque(maxlen=10))
 
@@ -171,67 +172,67 @@ async def before():
 
 
 async def gerar_conteudo_com_ia():
-    global historico_palavras, historico_frases  # <-- necessário para modificar os sets globais
-    prompt_palavra = """
-Crie uma palavra em inglês com:
-- Definição em português
-- Um exemplo de frase em inglês com tradução
+    # Carrega o histórico salvo
+    try:
+        with open("historico.json", "r", encoding="utf-8") as f:
+            historico = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        historico = {"palavras": [], "frases": []}
+
+    for _ in range(5):  # tenta gerar algo novo até 5 vezes
+        prompt = """
+Crie duas coisas para um canal de aprendizado:
+
+1. Uma palavra em inglês com:
+- Significado
+- Um exemplo de frase em inglês (com tradução).
+
+2. Uma frase estoica com:
+- Autor (se souber)
+- Pequena explicação/reflexão em português.
 
 Formato:
 Palavra: ...
 Significado: ...
 Exemplo: ...
 Tradução: ...
-"""
-    prompt_frase = """
-Crie uma frase estoica com:
-- Autor (se souber)
-- Explicação/reflexão sobre a frase
 
-Formato:
 Frase estoica: "..."
 Autor: ...
 Reflexão: ...
 """
+        try:
+            response = groq_client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, escrevendo para um canal no Discord."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            conteudo = response.choices[0].message.content
 
-    try:
-        resposta_palavra = groq_client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[
-                {"role": "system", "content": "Você é um professor de inglês escrevendo para um canal do Discord."},
-                {"role": "user", "content": prompt_palavra}
-            ]
-        ).choices[0].message.content.strip()
+            # Verifica se já foi usado
+            palavra_linha = next((l for l in conteudo.splitlines() if l.lower().startswith("palavra:")), "")
+            frase_linha = next((l for l in conteudo.splitlines() if l.lower().startswith("frase estoica:")), "")
 
-        resposta_frase = groq_client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[
-                {"role": "system", "content": "Você é um filósofo estoico que compartilha frases com reflexão para um canal do Discord."},
-                {"role": "user", "content": prompt_frase}
-            ]
-        ).choices[0].message.content.strip()
+            palavra = palavra_linha.replace("Palavra:", "").strip()
+            frase = frase_linha.replace("Frase estoica:", "").strip().strip('"')
 
-        # Verifica repetições
-        if resposta_palavra in historico_palavras or resposta_frase in historico_frases:
-            return "⏳ Aguarde um momento. O conteúdo de hoje ainda está sendo preparado!"
+            if palavra not in historico["palavras"] and frase not in historico["frases"]:
+                # Atualiza o histórico
+                historico["palavras"].append(palavra)
+                historico["frases"].append(frase)
 
-        # Adiciona ao histórico para evitar repetições futuras
-        historico_palavras.add(resposta_palavra)
-        historico_frases.add(resposta_frase)
+                with open("historico.json", "w", encoding="utf-8") as f:
+                    json.dump(historico, f, indent=2, ensure_ascii=False)
 
-        # Formatação final para o Discord com negritos e espaçamentos
-        mensagem_formatada = (
-            "📚 **Palavra do Dia**\n\n"
-            f"{resposta_palavra}\n\n"
-            "🧘‍♂️ **Frase Estoica do Dia**\n\n"
-            f"{resposta_frase}\n\n"
-            "_Espero que isso inspire seu dia com aprendizado e reflexão._"
-        )
+                return conteudo
 
-        return mensagem_formatada
+        except Exception as e:
+            return f"❌ Erro ao gerar conteúdo diário: {e}"
 
-    except Exception as e:
-        return f"❌ Erro ao gerar conteúdo diário: {e}"
+    return "⚠️ Não foi possível gerar um conteúdo inédito após 5 tentativas."
+
 
 # ------ Servidor Flask ------
 app = Flask(__name__)
