@@ -16,9 +16,8 @@ from dotenv import load_dotenv
 # API Clients and specific imports
 from groq import Groq
 from serpapi import GoogleSearch
-import google.generativeai as genai
-# <<< CORREÇÃO: Garantir que esta importação esteja ativa >>>
-from google.generativeai import types as genai_types
+from google import genai
+from google.genai import types
 import aiohttp # Para baixar imagens
 import io      # Para lidar com bytes de imagem
 from PIL import Image # Pillow é necessário para processar a imagem de entrada/saída
@@ -85,9 +84,10 @@ else:
 # Configure Google Generative AI Client
 if GOOGLE_AI_API_KEY:
     try:
-        genai.configure(api_key=GOOGLE_AI_API_KEY)
-        print("✅ Cliente Google Generative AI configurado.")
+    google_client = genai.Client(api_key=GOOGLE_AI_API_KEY)
+    print("✅ Cliente Google Generative AI configurado.")
     except Exception as e:
+        google_client = None
         print(f"❌ Erro ao configurar Google Generative AI: {e}")
 else:
     print("⚠️ Chave GOOGLE_AI_API_KEY não encontrada. Comando !img desabilitado.")
@@ -180,29 +180,38 @@ async def ask(ctx, *, pergunta):
         return await ctx.send("❌ O serviço de chat não está disponível (sem chave API).")
     if not autorizado(ctx):
         return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado ou DM permitida.")
+
     canal_id = ctx.channel.id
     print(f"\n--- !ask DEBUG ---")
     print(f"Comando recebido de: {ctx.author} ({ctx.author.id}) em Canal ID: {canal_id}")
     print(f"Histórico ANTES tem {len(conversas[canal_id])} mensagens.")
     print(f"Pergunta recebida: '{pergunta}'")
+
     historico = conversas[canal_id]
     historico.append({"role": "user", "content": pergunta})
     mensagens = [{"role": "system", "content": "Você é um assistente útil, direto e simpático, respondendo em português brasileiro."}] + list(historico)
+
     print(f"Enviando {len(mensagens)} mensagens para Groq (modelo: llama3-8b-8192).")
+
     try:
         async with ctx.typing():
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192", messages=mensagens, temperature=0.7
+                model="llama3-8b-8192",
+                messages=mensagens,
+                temperature=0.7
             )
             resposta = response.choices[0].message.content
+
         print(f"Resposta recebida da Groq (primeiros 100 chars): '{resposta[:100]}...'")
+
         historico.append({"role": "assistant", "content": resposta})
         print(f"Histórico DEPOIS tem {len(conversas[canal_id])} mensagens.")
         print(f"--- Fim !ask DEBUG ---\n")
-        if len(resposta) > 2000:
-            await ctx.send(resposta[:1990] + "\n[...]")
-        else:
-            await ctx.send(resposta)
+
+        # Envia resposta quebrando em blocos de até 2000 caracteres
+        for i in range(0, len(resposta), 2000):
+            await ctx.send(resposta[i:i+2000])
+
     except Exception as e:
         print(f"❌ Erro na chamada Groq para !ask: {e}")
         traceback.print_exc()
@@ -212,6 +221,7 @@ async def ask(ctx, *, pergunta):
             print("DEBUG: Última pergunta do usuário removida do histórico devido a erro.")
         await ctx.send("❌ Ocorreu um erro ao processar sua pergunta com a IA.")
 
+
 @bot.command()
 async def search(ctx, *, consulta):
     if not groq_client:
@@ -220,13 +230,15 @@ async def search(ctx, *, consulta):
         return await ctx.send("❌ O serviço de busca web não está disponível (sem chave API SerpApi).")
     if not autorizado(ctx):
         return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado ou DM permitida.")
+
     await ctx.send(f"🔎 Buscando na web sobre: \"{consulta}\"...")
+
     dados_busca = buscar_na_web(consulta)
-    if "Erro:" in dados_busca:
-        await ctx.send(dados_busca); return
-    if "Nenhum resultado" in dados_busca:
-        await ctx.send(dados_busca); return
+    if "Erro:" in dados_busca or "Nenhum resultado" in dados_busca:
+        return await ctx.send(dados_busca)
+
     await ctx.send("🧠 Analisando resultados com a IA...")
+
     prompt_contexto = f"""
     Você recebeu a seguinte consulta de um usuário: "{consulta}"
     Aqui estão os principais resultados de uma busca na web sobre isso:
@@ -235,26 +247,32 @@ async def search(ctx, *, consulta):
     --- FIM DOS RESULTADOS ---
     Com base **apenas** nas informações dos resultados da busca fornecidos acima, responda à consulta original do usuário de forma clara, concisa e objetiva em português brasileiro. Cite os pontos principais encontrados. Não adicione informações externas aos resultados. Se os resultados não responderem diretamente, diga isso.
     """
+
     mensagens_busca = [
         {"role": "system", "content": "Você é um assistente que resume informações de busca na web de forma precisa e direta, baseado SOMENTE nos dados fornecidos."},
         {"role": "user", "content": prompt_contexto}
     ]
+
     print(f"DEBUG (!search): Enviando {len(mensagens_busca)} mensagens para Groq (contexto zerado).")
+
     try:
         async with ctx.typing():
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192", messages=mensagens_busca, temperature=0.3
+                model="llama3-8b-8192",
+                messages=mensagens_busca,
+                temperature=0.3
             )
             resposta = response.choices[0].message.content
         print("DEBUG (!search): Resposta da IA recebida.")
-        if len(resposta) > 2000:
-            await ctx.send(resposta[:1990] + "\n[...]")
-        else:
-            await ctx.send(resposta)
+
+        for i in range(0, len(resposta), 2000):
+            await ctx.send(resposta[i:i+2000])
+
     except Exception as e:
         print(f"❌ Erro na chamada Groq para !search: {e}")
         traceback.print_exc()
         await ctx.send("❌ Ocorreu um erro ao analisar os resultados da busca com a IA.")
+
 
 @bot.command()
 async def testar_conteudo(ctx):
@@ -268,7 +286,7 @@ async def testar_conteudo(ctx):
     else:
          await ctx.send(conteudo)
 
-# --- Comando !img ---
+# --- comando !img refatorado ---
 @bot.command()
 async def img(ctx, *, prompt: str):
     print(f"\n--- !img START - Ctx ID: {ctx.message.id} ---")
@@ -277,127 +295,54 @@ async def img(ctx, *, prompt: str):
     if not autorizado(ctx):
         return await ctx.send("❌ Comando não autorizado.")
 
-    input_pil_image = None
-    input_filename = "input_image"
+    # Feedback inicial
+    await ctx.send("⏳ Gerando imagem…")
 
-    # 1. Verificar e processar anexo de imagem
-    if ctx.message.attachments:
-        attachment = ctx.message.attachments[0]
-        if attachment.content_type and attachment.content_type in ['image/png', 'image/jpeg', 'image/jpg', 'image/webp']:
-            await ctx.send(f"⏳ Processando imagem anexada '{attachment.filename}'...")
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(attachment.url) as resp:
-                        if resp.status == 200:
-                            image_bytes = await resp.read()
-                            input_pil_image = Image.open(io.BytesIO(image_bytes))
-                            input_filename = attachment.filename
-                            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem '{input_filename}' baixada ({len(image_bytes)} bytes).")
-                        else:
-                            await ctx.send(f"❌ Falha ao baixar anexo (status: {resp.status}).")
-                            return
-            except Exception as e:
-                await ctx.send(f"❌ Erro ao processar anexo: {e}")
-                print(f"Erro detalhado (!img): {e}"); traceback.print_exc(); return
-        else:
-            await ctx.send(f"⚠️ Anexo '{attachment.filename}' não suportado. Ignorando.")
-
-    # Mensagem de feedback
-    if input_pil_image: await ctx.send(f"⏳ Editando imagem '{input_filename}'...")
-    else: await ctx.send(f"⏳ Gerando imagem nova...")
-
-    # 2. Preparar 'contents' e chamar a API Gemini
     try:
-        contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
+        # 1. Prepara os contents (texto e opcional imagem de entrada)
+        contents = []
+        # Sempre envia o prompt como primeiro content
+        contents.append({"parts": [{"text": prompt}]})
+        # Se houver imagem anexada, converte para base64 e adiciona
+        if ctx.message.attachments:
+            attachment = ctx.message.attachments[0]
+            img_bytes = await attachment.read()
+            b64 = base64.b64encode(img_bytes).decode()
+            contents.append({"parts": [{"inlineData": {"data": b64}}]})
 
-        gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
+        # 2. Chama a Gemini API para gerar texto+imagem em modo nativo
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-exp-image-generation",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"]
+            )
+        )
 
-        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Chamando Gemini SEM config explícita. Contents: {[type(c).__name__ for c in contents_for_api]}")
+        # 3. Itera pelas partes e separa texto x imagem
+        final_text = []
+        image_data = None
+        for part in response.candidates[0].content.parts:
+            if part.text:
+                final_text.append(part.text)
+            elif part.inline_data and part.inline_data.data:
+                image_data = base64.b64decode(part.inline_data.data)
 
-        response = None
-        async with ctx.typing():
-            response = await gemini_model.generate_content_async(contents=contents_for_api)
-
-        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): RESPOSTA recebida da API Gemini.")
-        if response: print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Candidates? { hasattr(response, 'candidates') } | Feedback? { hasattr(response, 'prompt_feedback') }")
-
-        # 3. Processar a Resposta
-        response_text_parts = []
-        generated_image_bytes = None
-        processed_successfully = False
-        try:
-            if response and response.candidates:
-                 # Checa se a resposta foi bloqueada ANTES de tentar acessar partes
-                 if hasattr(response.candidates[0], 'finish_reason') and response.candidates[0].finish_reason != 1: # 1 = STOP (normal)
-                      reason_num = response.candidates[0].finish_reason
-                      safety_ratings_str = str(getattr(response.candidates[0], 'safety_ratings', 'N/A'))
-                      error_msg = f"⚠️ Geração interrompida/bloqueada. Razão: {reason_num}. Safety: {safety_ratings_str}"
-                      print(f"WARN (!img - Ctx ID: {ctx.message.id}): {error_msg}")
-                      response_text_parts.append(error_msg)
-                 # Só tenta processar partes se não foi bloqueado e tem conteúdo
-                 elif hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
-                    print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Processando {len(response.candidates[0].content.parts)} partes.")
-                    for i, part in enumerate(response.candidates[0].content.parts):
-                        part_info = f"Part {i}:"
-                        if hasattr(part, 'text') and part.text: part_info += " [TEXT]"
-                        if hasattr(part, 'inline_data'): part_info += f" [INLINE_DATA - Mime: {getattr(part.inline_data, 'mime_type', 'N/A')}, Data? {hasattr(part.inline_data, 'data')}]"
-                        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): {part_info}")
-
-                        if hasattr(part, 'text') and part.text:
-                            response_text_parts.append(part.text)
-                            processed_successfully = True # Processou texto
-                        elif hasattr(part, 'inline_data') and part.inline_data and generated_image_bytes is None:
-                            if hasattr(part.inline_data, 'data'):
-                                 generated_image_bytes = part.inline_data.data
-                                 print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem inline_data ARMAZENADA ({len(generated_image_bytes)} bytes).")
-                                 processed_successfully = True # Processou imagem
-                            else: print(f"WARN (!img - Ctx ID: {ctx.message.id}): part.inline_data sem 'data'.")
-                 else:
-                     print(f"WARN (!img - Ctx ID: {ctx.message.id}): Resposta válida, mas sem 'content' ou 'parts'.")
-            else: # Nenhuma candidate ou resposta inválida
-                feedback = "N/A"
-                if response and hasattr(response, 'prompt_feedback'):
-                     # ... (código para obter feedback) ...
-                   print(f"WARN (!img - Ctx ID: {ctx.message.id}): Nenhuma 'candidate'. Feedback: {feedback}")
-                   response_text_parts.append(f"⚠️ API não retornou candidato. {feedback}")
-
-        except Exception as proc_err:
-             print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Erro ao PROCESSAR resposta da API.")
-             print(f"❌ Erro: {proc_err}")
-             traceback.print_exc()
-             await ctx.send(f"❌ Ocorreu um erro interno ao processar a resposta da API de imagem.")
-             print(f"--- !img END (ERRO PROC) - Ctx ID: {ctx.message.id} ---")
-             return # Sai da função se o processamento falhar
-
-        # 4. Enviar Resultados para o Discord
-        final_response_text = "\n".join(response_text_parts).strip()
-        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Texto final: '{final_response_text[:100]}...' | Imagem? {'Sim' if generated_image_bytes else 'Não'}")
-        if generated_image_bytes:
-            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Enviando imagem...")
-            img_file = discord.File(io.BytesIO(generated_image_bytes), filename="gemini_image.png")
-            if final_response_text:
-                if len(final_response_text) > 1900: final_response_text = final_response_text[:1900] + "..."
-                await ctx.send(f"{final_response_text}", file=img_file)
-            else:
-                await ctx.send(f"🖼️ Imagem para '{prompt}':", file=img_file)
-            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem enviada.")
-        elif final_response_text:
-            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Enviando APENAS texto...")
-            if len(final_response_text) > 2000: final_response_text = final_response_text[:1990] + "\n[...]"
-            await ctx.send(f"{final_response_text}")
-            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Texto enviado.")
-        else:
-            print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Nenhuma imagem ou texto após processamento.")
-            await ctx.send("❌ API não retornou conteúdo válido.")
+        # 4. Envia para o Discord
+        # Primeiro texto, se houver
+        if final_text:
+            await send_long_message(ctx, "\n".join(final_text))
+        # Depois imagem
+        if image_data:
+            file = discord.File(io.BytesIO(image_data), filename="gemini.png")
+            await ctx.send(file=file)
 
     except Exception as e:
-        print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Entrou no bloco EXCEPT GERAL.")
-        print(f"❌ Erro: {e}")
+        print(f"ERROR (!img): {e}")
         traceback.print_exc()
-        await ctx.send(f"❌ Ocorreu um erro interno ao processar o comando !img.")
+        await ctx.send(f"❌ Erro ao gerar ou processar imagem: {e}")
 
     print(f"--- !img END - Ctx ID: {ctx.message.id} ---")
-
 
 # --- Task de Conteúdo Diário ---
 
