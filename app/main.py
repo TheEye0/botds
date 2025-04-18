@@ -89,6 +89,7 @@ if GOOGLE_AI_API_KEY:
         google_client = None
         print(f"❌ Erro ao configurar Google Generative AI: {e}")
 else:
+    google_client = None # Define como None também se a chave estiver faltando
     print("⚠️ Chave GOOGLE_AI_API_KEY não encontrada. Comando !img desabilitado.")
 
 
@@ -310,10 +311,10 @@ async def img(ctx, *, prompt: str):
             contents.append({"parts": [{"inlineData": {"data": b64}}]})
 
         # 2. Chama a Gemini API para gerar texto+imagem em modo nativo
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-exp-image-generation",
+        response = google_client.generate_content( # Usa google_client e chama generate_content diretamente
+            model="models/gemini-2.0-flash-exp-image-generation", # Usa 'models/' prefix? Verificar!
             contents=contents,
-            config=types.GenerateContentConfig(
+            generation_config=genai.GenerationConfig( # Passa a config aqui
                 response_modalities=["TEXT", "IMAGE"]
             )
         )
