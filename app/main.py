@@ -100,7 +100,7 @@ conversas = defaultdict(lambda: deque(maxlen=10)) # Histórico por canal para !a
 
 # --- Helper Functions ---
 
-# Verificação de autorização
+# Verificação de autorização (CORRIGIDA)
 def autorizado(ctx):
     # --- DEBUG LOG ---
     print(f"--- Autorizado Check ---")
@@ -115,7 +115,6 @@ def autorizado(ctx):
     elif ctx.guild:
         print(f"Context: Guild Channel")
         print(f"Guild ID: {ctx.guild.id} vs Allowed: {ALLOWED_GUILD_ID}")
-        # <<< CORREÇÃO APLICADA AQUI >>>
         is_allowed = (ctx.guild.id == ALLOWED_GUILD_ID)
         print(f"Guild Check Result: {is_allowed}")
         print(f"--- Fim Autorizado Check ---")
@@ -178,72 +177,48 @@ async def on_ready():
 
 @bot.command()
 async def ask(ctx, *, pergunta):
-    # <<< CORREÇÃO 1: Logs Detalhados no !ask >>>
     if not groq_client: # Verifica se o cliente foi inicializado
         return await ctx.send("❌ O serviço de chat não está disponível (sem chave API).")
     if not autorizado(ctx):
         return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado ou DM permitida.")
 
     canal_id = ctx.channel.id
-    # --- LOG 1: Estado do histórico ANTES da pergunta ---
     print(f"\n--- !ask DEBUG ---")
     print(f"Comando recebido de: {ctx.author} ({ctx.author.id}) em Canal ID: {canal_id}")
-    # Cuidado ao logar histórico completo se for muito grande ou sensível
-    # print(f"Histórico ANTES ({len(conversas[canal_id])} msgs): {list(conversas[canal_id])}")
     print(f"Histórico ANTES tem {len(conversas[canal_id])} mensagens.")
     print(f"Pergunta recebida: '{pergunta}'")
-
     historico = conversas[canal_id]
-
-    # Adiciona a nova pergunta ao histórico
     historico.append({"role": "user", "content": pergunta})
-
-    # --- LOG 2: Mensagens enviadas para a API ---
     mensagens = [{"role": "system", "content": "Você é um assistente útil, direto e simpático, respondendo em português brasileiro."}] + list(historico)
-    # print(f"Mensagens a serem enviadas para Groq ({len(mensagens)} total): {mensagens}") # Pode ser muito verboso
     print(f"Enviando {len(mensagens)} mensagens para Groq (modelo: llama3-8b-8192).")
-
     try:
-        async with ctx.typing(): # Mostra "Bot is typing..."
+        async with ctx.typing():
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192", # Modelo sugerido como alternativa
+                model="llama3-8b-8192",
                 messages=mensagens,
-                temperature=0.7 # Um pouco de criatividade
+                temperature=0.7
             )
             resposta = response.choices[0].message.content
-
-        # --- LOG 3: Resposta recebida da API ---
         print(f"Resposta recebida da Groq (primeiros 100 chars): '{resposta[:100]}...'")
-
-        # Salva a resposta no histórico
         historico.append({"role": "assistant", "content": resposta})
-
-        # --- LOG 4: Estado do histórico DEPOIS da resposta ---
-        # print(f"Histórico DEPOIS ({len(conversas[canal_id])} msgs): {list(conversas[canal_id])}")
         print(f"Histórico DEPOIS tem {len(conversas[canal_id])} mensagens.")
         print(f"--- Fim !ask DEBUG ---\n")
-
-        # Envia a resposta (evita duplicar se a resposta for muito longa)
         if len(resposta) > 2000:
-            await ctx.send(resposta[:1990] + "\n[...]") # Trunca um pouco antes
+            await ctx.send(resposta[:1990] + "\n[...]")
         else:
             await ctx.send(resposta)
-
     except Exception as e:
-        # --- LOG 5: Erro na API ---
         print(f"❌ Erro na chamada Groq para !ask: {e}")
-        traceback.print_exc() # Imprime o traceback completo no log
+        traceback.print_exc()
         print(f"--- Fim !ask DEBUG (ERRO) ---\n")
-        # Tenta remover a última pergunta do histórico se falhou
         if historico and historico[-1]["role"] == "user":
             historico.pop()
             print("DEBUG: Última pergunta do usuário removida do histórico devido a erro.")
         await ctx.send("❌ Ocorreu um erro ao processar sua pergunta com a IA.")
-    # <<< FIM DA CORREÇÃO 1 >>>
 
 @bot.command()
 async def search(ctx, *, consulta):
-    if not groq_client: # Também depende do Groq para resumir
+    if not groq_client:
         return await ctx.send("❌ O serviço de busca+resumo não está disponível (sem chave API Groq).")
     if not SERPAPI_KEY:
         return await ctx.send("❌ O serviço de busca web não está disponível (sem chave API SerpApi).")
@@ -252,20 +227,13 @@ async def search(ctx, *, consulta):
 
     await ctx.send(f"🔎 Buscando na web sobre: \"{consulta}\"...")
     dados_busca = buscar_na_web(consulta)
-
     if "Erro:" in dados_busca:
-        await ctx.send(dados_busca) # Informa erro da busca
+        await ctx.send(dados_busca)
         return
-
     if "Nenhum resultado" in dados_busca:
-        await ctx.send(dados_busca) # Informa que não achou
+        await ctx.send(dados_busca)
         return
-
     await ctx.send("🧠 Analisando resultados com a IA...")
-
-    canal_id = ctx.channel.id
-    historico = conversas[canal_id]
-
     prompt_contexto = f"""
     Você recebeu a seguinte consulta de um usuário: "{consulta}"
 
@@ -276,36 +244,28 @@ async def search(ctx, *, consulta):
 
     Com base **apenas** nas informações dos resultados da busca fornecidos acima, responda à consulta original do usuário de forma clara, concisa e objetiva em português brasileiro. Cite os pontos principais encontrados. Não adicione informações externas aos resultados. Se os resultados não responderem diretamente, diga isso.
     """
-
-    # Zera o histórico para focar SÓ na busca atual
     mensagens_busca = [
         {"role": "system", "content": "Você é um assistente que resume informações de busca na web de forma precisa e direta, baseado SOMENTE nos dados fornecidos."},
         {"role": "user", "content": prompt_contexto}
     ]
     print(f"DEBUG (!search): Enviando {len(mensagens_busca)} mensagens para Groq (contexto zerado).")
-
     try:
         async with ctx.typing():
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192", # Modelo para sumarização
-                messages=mensagens_busca, # Usa as mensagens zeradas
-                temperature=0.3 # Mais direto para sumarização
+                model="llama3-8b-8192",
+                messages=mensagens_busca,
+                temperature=0.3
             )
             resposta = response.choices[0].message.content
-
-        # NÃO adiciona busca ao histórico principal de conversas
         print("DEBUG (!search): Resposta da IA recebida.")
-
         if len(resposta) > 2000:
             await ctx.send(resposta[:1990] + "\n[...]")
         else:
             await ctx.send(resposta)
-
     except Exception as e:
         print(f"❌ Erro na chamada Groq para !search: {e}")
         traceback.print_exc()
         await ctx.send("❌ Ocorreu um erro ao analisar os resultados da busca com a IA.")
-
 
 @bot.command()
 async def testar_conteudo(ctx):
@@ -313,12 +273,11 @@ async def testar_conteudo(ctx):
         return await ctx.send("❌ Comando não autorizado.")
     await ctx.send("⏳ Gerando conteúdo de teste...")
     async with ctx.typing():
-        conteudo = await gerar_conteudo_com_ia() # Pode demorar um pouco
+        conteudo = await gerar_conteudo_com_ia()
     if len(conteudo) > 2000:
          await ctx.send(conteudo[:1990] + "\n[...]")
     else:
          await ctx.send(conteudo)
-
 
 # --- Comando !img ---
 @bot.command()
@@ -365,29 +324,20 @@ async def img(ctx, *, prompt: str):
     try:
         contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
 
-        # <<< CORREÇÃO 2: Usar genai.GenerationConfig >>>
-        try:
-             # Acessa diretamente do módulo principal genai
-             generation_config = genai.GenerationConfig(
-                 response_modalities=['TEXT', 'IMAGE']
-             )
-             print("DEBUG (!img): Usando genai.GenerationConfig")
-        except AttributeError as e_config:
-             # Fallback muito improvável, mas loga o erro se acontecer
-             print(f"ERRO CRÍTICO (!img): Falha ao encontrar genai.GenerationConfig: {e_config}")
-             await ctx.send("❌ Erro interno na configuração da API de imagem.")
-             return # Aborta se não conseguir configurar
-        # <<< FIM DA CORREÇÃO 2 >>>
+        # <<< CORREÇÃO: REMOVIDO o bloco que criava 'generation_config' >>>
+        # A linha 'generation_config = genai.GenerationConfig(...)' foi removida.
 
         gemini_model = genai.GenerativeModel(
             model_name="gemini-2.0-flash-exp-image-generation"
         )
 
-        print(f"DEBUG (!img): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}") # Mostra nomes dos tipos
+        print(f"DEBUG (!img): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}")
 
         async with ctx.typing():
+            # Chama a API SEM o parâmetro generation_config
             response = await gemini_model.generate_content_async(
                 contents=contents_for_api
+                # Sem 'generation_config=...' aqui
             )
         print("DEBUG (!img): Resposta recebida da API Gemini.")
 
@@ -407,19 +357,15 @@ async def img(ctx, *, prompt: str):
                         else:
                              print("WARN (!img): part.inline_data sem atributo 'data'.")
              else:
-                 # Tenta obter informações de erro do candidato
                  candidate_info = response.candidates[0]
                  finish_reason = getattr(candidate_info, 'finish_reason', 'N/A')
                  safety_ratings = getattr(candidate_info, 'safety_ratings', 'N/A')
                  print(f"WARN (!img): Estrutura inesperada (sem content/parts). FinishReason: {finish_reason}, Safety: {safety_ratings}")
-                 # Tenta pegar texto alternativo
                  if hasattr(candidate_info, 'text'):
                      response_text_parts.append(candidate_info.text)
                  else:
                       response_text_parts.append(f"⚠️ Resposta da API incompleta ou bloqueada. Razão: {finish_reason}")
-
         else:
-            # Tenta obter feedback do prompt se não houver candidatos
             feedback = "N/A"
             if hasattr(response, 'prompt_feedback'):
                  block_reason = getattr(response.prompt_feedback, 'block_reason', None)
@@ -427,10 +373,8 @@ async def img(ctx, *, prompt: str):
                      feedback = f"Prompt bloqueado. Razão: {block_reason}"
                  else:
                      feedback = str(response.prompt_feedback)
-
             print(f"WARN (!img): Nenhuma 'candidate' na resposta. Prompt Feedback: {feedback}")
             response_text_parts.append(f"⚠️ A API não retornou um candidato válido. {feedback}")
-
 
         # 4. Enviar Resultados para o Discord
         final_response_text = "\n".join(response_text_parts).strip()
@@ -439,7 +383,7 @@ async def img(ctx, *, prompt: str):
             print("DEBUG (!img): Enviando imagem gerada para o Discord.")
             img_file = discord.File(io.BytesIO(generated_image_bytes), filename="gemini_image.png")
             if final_response_text:
-                if len(final_response_text) > 1900: # Limite um pouco menor para caber com a imagem
+                if len(final_response_text) > 1900:
                     final_response_text = final_response_text[:1900] + "..."
                 await ctx.send(f"{final_response_text}", file=img_file)
             else:
@@ -464,26 +408,23 @@ async def img(ctx, *, prompt: str):
 @tasks.loop(minutes=1) # Verifica a cada minuto
 async def enviar_conteudo_diario():
     agora = datetime.datetime.now()
-    # Verifica se são 09:00 (ajuste o fuso horário se necessário no Render)
-    if agora.hour == 9 and agora.minute == 0:
+    if agora.hour == 9 and agora.minute == 0: # Ajuste para seu fuso horário se necessário
         print(f"INFO: Horário de enviar conteúdo diário ({agora}).")
         if CANAL_DESTINO_ID == 0:
             print("WARN: Canal de destino não configurado para conteúdo diário.")
-            return # Não faz nada se o canal não estiver definido
-
+            return
         canal = bot.get_channel(CANAL_DESTINO_ID)
         if canal:
             print(f"INFO: Gerando conteúdo para o canal {canal.name} ({CANAL_DESTINO_ID})...")
             try:
-                conteudo = await gerar_conteudo_com_ia() # Pode demorar
+                conteudo = await gerar_conteudo_com_ia()
                 print(f"INFO: Conteúdo gerado. Enviando para o canal...")
                 if len(conteudo) > 2000:
                     await canal.send(conteudo[:1990] + "\n[...]")
                 else:
                     await canal.send(conteudo)
                 print(f"INFO: Conteúdo enviado com sucesso.")
-                # Dorme por 61 segundos para garantir que não envie duas vezes no mesmo minuto
-                await asyncio.sleep(61)
+                await asyncio.sleep(61) # Garante que não rode duas vezes no mesmo minuto
             except Exception as e:
                 print(f"❌ Erro ao gerar ou enviar conteúdo diário: {e}")
                 traceback.print_exc()
@@ -498,15 +439,11 @@ async def before_enviar_conteudo_diario():
 
 
 async def gerar_conteudo_com_ia():
-    if not groq_client: # Verifica se Groq está disponível
+    if not groq_client:
         return "❌ Serviço de geração de conteúdo indisponível (sem chave API Groq)."
-
-    # Determina o nome base do arquivo local
     local_filename = HISTORICO_FILE_PATH.split('/')[-1]
     local_full_path = os.path.abspath(local_filename)
     print(f"DEBUG (gerar_conteudo): Tentando ler histórico local de '{local_full_path}'")
-
-    # Carrega o histórico salvo
     try:
         with open(local_filename, "r", encoding="utf-8") as f:
             historico = json.load(f)
@@ -519,17 +456,13 @@ async def gerar_conteudo_com_ia():
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
         print(f"WARN (gerar_conteudo): Arquivo historico.json não encontrado ou inválido ({e}). Começando do zero.")
         historico = {"palavras": [], "frases": []}
-
-    # Pega últimos N itens para evitar no prompt
     N_ITENS_RECENTES = 5
     palavras_recentes = historico["palavras"][-N_ITENS_RECENTES:]
     frases_recentes = historico["frases"][-N_ITENS_RECENTES:]
-
     palavras_evitar_str = ", ".join(f"'{p}'" for p in palavras_recentes) if palavras_recentes else "Nenhuma"
     frases_evitar_str = " | ".join(f"'{f}'" for f in frases_recentes) if frases_recentes else "Nenhuma"
 
-
-    for tentativa in range(15): # Tenta até 15 vezes
+    for tentativa in range(15):
         print(f"--- Geração Tentativa {tentativa + 1}/15 ---")
         prompt = f"""
 Crie duas coisas originais e variadas para um canal de aprendizado:
@@ -558,32 +491,23 @@ Frase estoica: "[Frase estoica aqui]"
 Autor: [Autor aqui]
 Reflexão: [Reflexão aqui]
 """
-        # print(f"DEBUG (gerar_conteudo): Enviando prompt:\n{prompt}") # Muito verboso
-
         try:
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192", # Usar modelo mais recente e capaz
+                model="llama3-8b-8192",
                 messages=[
                     {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, criativo e focado em gerar conteúdo variado e original para um canal no Discord, seguindo estritamente o formato pedido."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.85 # Aumenta mais a aleatoriedade
+                temperature=0.85
             )
-
             conteudo = response.choices[0].message.content
-            # print(f"DEBUG (gerar_conteudo): Conteúdo recebido:\n{conteudo}") # Verboso
-
-            # Regex aprimorada
-            match_palavra = re.search(r"(?im)^Palavra:\s*\**(.+?)\**\s*$", conteudo) # (?im) para case-insensitive e multiline
+            match_palavra = re.search(r"(?im)^Palavra:\s*\**(.+?)\**\s*$", conteudo)
             match_frase = re.search(r"(?im)^Frase estoica:\s*\"?(.+)\"?\s*$", conteudo)
 
             if match_palavra and match_frase:
                 palavra = match_palavra.group(1).strip()
                 frase = match_frase.group(1).strip()
-
                 print(f"DEBUG (gerar_conteudo): Extraído - Palavra='{palavra}', Frase='{frase}'")
-
-                # Verificação de repetição (case-insensitive)
                 palavra_lower = palavra.lower()
                 frase_lower = frase.lower()
                 historico_palavras_lower = [p.lower() for p in historico["palavras"]]
@@ -593,8 +517,6 @@ Reflexão: [Reflexão aqui]
                     print("INFO (gerar_conteudo): Conteúdo inédito encontrado!")
                     historico["palavras"].append(palavra)
                     historico["frases"].append(frase)
-
-                    # --- Bloco de salvar local e fazer upload ---
                     try:
                         with open(local_filename, "w", encoding="utf-8") as f:
                             print(f"DEBUG (gerar_conteudo): Salvando histórico atualizado em '{local_full_path}'")
@@ -602,73 +524,47 @@ Reflexão: [Reflexão aqui]
                             print(f"✅ Histórico salvo localmente com sucesso.")
                     except Exception as save_err:
                         print(f"❌ Erro ao salvar o arquivo local '{local_filename}': {save_err}")
-                        # Não retorna aqui, pois o conteúdo foi gerado, apenas não salvo
-
-                    # Tenta fazer upload mesmo se o save local falhar (o uploader lê o arquivo)
                     try:
                         print(f"INFO (gerar_conteudo): Tentando enviar '{HISTORICO_FILE_PATH}' para o GitHub...")
-                        # A função upload_to_github já tem seus próprios logs detalhados
-                        status, resp_json = await asyncio.to_thread(upload_to_github) # Executa em outra thread para não bloquear
-                        # Log está dentro da função uploader, não precisa repetir aqui
+                        status, resp_json = await asyncio.to_thread(upload_to_github)
                         if status not in [200, 201]:
                              print(f"WARN (gerar_conteudo): Upload para GitHub falhou ou retornou status {status}.")
                         else:
                              print(f"INFO (gerar_conteudo): Upload para GitHub parece ter funcionado (status {status}).")
-
                     except Exception as upload_err:
                         print(f"❌ Exceção durante a chamada de upload_to_github: {upload_err}")
                         traceback.print_exc()
-                    # --- Fim do bloco de upload ---
-
-                    return conteudo # Retorna o conteúdo gerado e salvo/tentado upload
-
+                    return conteudo
                 else:
                     print(f"⚠️ Conteúdo repetido detectado (Palavra: '{palavra}', Frase: '{frase}'). Tentando novamente...")
-
             else:
                  print(f"⚠️ Regex falhou! Palavra Match: {match_palavra}, Frase Match: {match_frase}")
-                 # print(f"Conteúdo original que causou falha na regex:\n{conteudo}") # Verboso
-
         except Exception as e:
             print(f"❌ Erro durante a chamada da API Groq ou processamento na tentativa {tentativa+1}: {e}")
             traceback.print_exc()
-            # Continua o loop para a próxima tentativa
-
-        # Pequena pausa entre tentativas para não sobrecarregar
         await asyncio.sleep(3)
-
-    # Se o loop terminar sem sucesso
     print("⚠️ Não foi possível gerar um conteúdo inédito após 15 tentativas.")
     return "⚠️ Desculpe, não consegui gerar um conteúdo novo hoje após várias tentativas."
 
-
 # ------ Servidor Flask (Keep-alive para Render) ------
 app = Flask(__name__)
-
 @app.route("/")
 def home():
-    # Retorna algo mais informativo
     return f"Bot {bot.user.name if bot.user else ''} está online!"
-
 def run_server():
-    # O Render define a porta na variável de ambiente PORT
-    port = int(os.environ.get("PORT", 10000)) # Render free tier usa 10000 às vezes
+    port = int(os.environ.get("PORT", 10000))
     print(f"INFO: Iniciando servidor Flask na porta {port}")
-    # CORREÇÃO: Removido 'log_output=False' e 'static_files={}' (não necessário aqui)
+    # CORREÇÃO: Removido 'log_output=False'
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # ------ Início da aplicação ------
 if __name__ == "__main__":
-    # Verifica se as chaves essenciais estão presentes
     if not DISCORD_TOKEN:
         print("ERRO CRÍTICO: DISCORD_TOKEN não encontrado no ambiente. O bot não pode iniciar.")
     else:
-        # Inicia o servidor Flask em uma thread separada
         print("INFO: Iniciando thread do servidor Flask...")
-        server_thread = Thread(target=run_server, daemon=True) # Daemon=True permite fechar com o bot
+        server_thread = Thread(target=run_server, daemon=True)
         server_thread.start()
-
-        # Inicia o bot Discord
         print("INFO: Iniciando o bot Discord...")
         try:
             bot.run(DISCORD_TOKEN)
