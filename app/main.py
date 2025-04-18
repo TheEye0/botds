@@ -174,14 +174,14 @@ async def before():
 
 
 async def gerar_conteudo_com_ia():
-    # Carrega o histórico salvo
+    # ... (código anterior) ...
     try:
         with open("historico.json", "r", encoding="utf-8") as f:
             historico = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         historico = {"palavras": [], "frases": []}
 
-    for _ in range(10):  # tenta gerar algo novo até 10 vezes
+    for _ in range(10):
         prompt = """
 Crie duas coisas para um canal de aprendizado:
 
@@ -203,7 +203,7 @@ Frase estoica: "..."
 Autor: ...
 Reflexão: ...
 """
-        try:
+        try: # Início do try principal
             response = groq_client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
@@ -213,7 +213,6 @@ Reflexão: ...
             )
             conteudo = response.choices[0].message.content
 
-            # Tenta extrair com regex (mais tolerante a variações de formatação)
             match_palavra = re.search(r"(?i)^palavra:\s*(.+)", conteudo, re.MULTILINE)
             match_frase = re.search(r"(?i)^frase estoica:\s*\"?(.+?)\"?", conteudo, re.MULTILINE)
 
@@ -225,28 +224,53 @@ Reflexão: ...
                     historico["palavras"].append(palavra)
                     historico["frases"].append(frase)
 
+                    # Salva localmente e depois tenta o upload DENTRO do 'with'
                     with open("historico.json", "w", encoding="utf-8") as f:
                         json.dump(historico, f, indent=2, ensure_ascii=False)
-                        print("✅ Histórico salvo em:", os.path.abspath("historico.json"))
-                        
-# Envia o arquivo atualizado pro GitHub
-status, resp = upload_to_github()
-if status == 201 or status == 200:
-    print("✅ Histórico atualizado no GitHub.")
-else:
-    print("⚠️ Erro ao enviar para o GitHub:", resp)
+                        print("✅ Histórico salvo localmente em:", os.path.abspath("historico.json"))
 
-                    return conteudo
+                        # --- INÍCIO DO BLOCO MOVIDO E CORRIGIDO ---
+                        try: # Adiciona um try/except específico para o upload (opcional, mas bom)
+                            print("Tentando enviar historico.json para o GitHub...")
+                            status, resp = upload_to_github()
+                            if status == 201 or status == 200:
+                                print("✅ Histórico atualizado no GitHub.")
+                            else:
+                                # Imprime mais detalhes do erro do GitHub
+                                print(f"⚠️ Erro ao enviar para o GitHub (Status: {status}): {resp}")
+                        except Exception as upload_err:
+                            print(f"❌ Exceção durante o upload para o GitHub: {upload_err}")
+                        # --- FIM DO BLOCO MOVIDO E CORRIGIDO ---
+
+                    return conteudo # Retorna o conteúdo se tudo deu certo (save local + tentativa de upload)
+
+            # Este else agora está no lugar certo em relação ao except principal
             else:
                 print("⚠️ Não foi possível extrair a palavra ou frase do conteúdo gerado:")
                 print(conteudo)
-                print("⚠️ Conteúdo repetido detectado.")
-                print("Palavra:", palavra)
-                print("Frase:", frase)
+                # Corrigido: a lógica de impressão de repetido estava fora do lugar
+                # Removido as linhas abaixo daqui pois 'palavra' e 'frase' podem não existir se o regex falhou
+                # print("⚠️ Conteúdo repetido detectado.")
+                # print("Palavra:", palavra)
+                # print("Frase:", frase)
 
+        # Este except agora segue corretamente o bloco try principal
         except Exception as e:
+            # Mensagem mais específica para erro na geração/processamento
+            print(f"❌ Erro ao gerar conteúdo ou processar resposta da IA: {e}")
+            # Mantém o retorno original para sinalizar falha na geração
             return f"❌ Erro ao gerar conteúdo diário: {e}"
 
+        # Adicionado um print se o conteúdo for repetido, dentro do loop
+        if 'palavra' in locals() and 'frase' in locals() and (palavra in historico["palavras"] or frase in historico["frases"]):
+             print(f"⚠️ Conteúdo repetido detectado (Palavra: '{palavra}', Frase: '{frase}'). Tentando novamente...")
+
+        # Pequena pausa para não sobrecarregar a API em caso de repetições rápidas
+        await asyncio.sleep(1)
+
+
+    # Mensagem se o loop terminar sem sucesso
+    print("⚠️ Não foi possível gerar um conteúdo inédito após 10 tentativas.")
     return "⚠️ Não foi possível gerar um conteúdo inédito após 10 tentativas."
 
 
