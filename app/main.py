@@ -174,118 +174,144 @@ async def before():
 
 
 async def gerar_conteudo_com_ia():
-    # ... (código anterior) ...
+    # Carrega o histórico salvo
     try:
-        with open("historico.json", "r", encoding="utf-8") as f:
+        with open(HISTORICO_FILE_PATH.split('/')[-1], "r", encoding="utf-8") as f: # Lê o arquivo local correto
             historico = json.load(f)
+            # Garante que as listas existam mesmo que o arquivo esteja mal formatado
+            if "palavras" not in historico: historico["palavras"] = []
+            if "frases" not in historico: historico["frases"] = []
     except (FileNotFoundError, json.JSONDecodeError):
+        print("WARN: Arquivo historico.json não encontrado ou inválido. Começando do zero.")
         historico = {"palavras": [], "frases": []}
 
-    for _ in range(10):
-        prompt = """
-Crie duas coisas para um canal de aprendizado:
+    # --- MELHORIA: Pegar últimos N itens para evitar no prompt ---
+    N_ITENS_RECENTES = 5 # Quantos itens recentes incluir no prompt (ajuste conforme necessário)
+    palavras_recentes = historico["palavras"][-N_ITENS_RECENTES:]
+    frases_recentes = historico["frases"][-N_ITENS_RECENTES:]
 
-1. Uma palavra em inglês com:
-- Significado
-- Um exemplo de frase em inglês (com tradução).
+    palavras_evitar_str = ", ".join(palavras_recentes) if palavras_recentes else "Nenhuma"
+    # Junta frases com um separador menos comum para evitar confusão
+    frases_evitar_str = " ;; ".join(frases_recentes) if frases_recentes else "Nenhuma"
+    # -------------------------------------------------------------
 
-2. Uma frase estoica com:
-- Autor (se souber)
-- Pequena explicação/reflexão em português.
+    # Aumenta as tentativas
+    for _ in range(15): # Aumentado de 10 para 15 tentativas
+        # --- MELHORIA: Prompt mais detalhado com restrições ---
+        prompt = f"""
+Crie duas coisas originais e variadas para um canal de aprendizado:
+
+1. Uma palavra em inglês útil com:
+- Significado claro em português.
+- Um exemplo de frase em inglês (com tradução para português).
+
+2. Uma frase estoica inspiradora com:
+- Autor (se souber, senão "Desconhecido" ou "Tradição Estoica").
+- Pequena explicação/reflexão em português (1-2 frases).
+
+**IMPORTANTE:**
+- **Seja criativo e evite repetições.**
+- **NÃO use as seguintes palavras recentes:** {palavras_evitar_str}
+- **NÃO use as seguintes frases estoicas recentes:** {frases_evitar_str}
+- Mantenha o formato EXATO abaixo.
 
 Formato:
-Palavra: ...
-Significado: ...
-Exemplo: ...
-Tradução: ...
+Palavra: [Palavra em inglês aqui]
+Significado: [Significado em português aqui]
+Exemplo: [Frase exemplo em inglês aqui]
+Tradução: [Tradução da frase exemplo aqui]
 
-Frase estoica: "..."
-Autor: ...
-Reflexão: ...
+Frase estoica: "[Frase estoica aqui]"
+Autor: [Autor aqui]
+Reflexão: [Reflexão aqui]
 """
-        try: # Início do try principal
+        # ---------------------------------------------------------
+
+        try:
+            print(f"--- Tentativa {_ + 1}/15 ---") # Log da tentativa
+            print(f"DEBUG: Enviando prompt (sem histórico completo):\n{prompt}") # Log do prompt
+
+            # --- MELHORIA: Adicionar parâmetro 'temperature' ---
             response = groq_client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
-                    {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, escrevendo para um canal no Discord."},
+                    {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, criativo e focado em variedade, escrevendo para um canal no Discord."},
                     {"role": "user", "content": prompt}
-                ]
+                ],
+                temperature=0.8 # Aumenta a aleatoriedade (valores entre 0.7 e 1.0 são bons para criatividade)
             )
-            conteudo = response.choices[0].message.content
+            # ----------------------------------------------------
 
-            match_palavra = re.search(r"(?i)^palavra:\s*(.+)", conteudo, re.MULTILINE)
-            match_frase = re.search(r"(?i)^frase estoica:\s*\"?(.+?)\"?", conteudo, re.MULTILINE)
+            conteudo = response.choices[0].message.content
+            print(f"DEBUG: Conteúdo recebido da API:\n{conteudo}") # Log da resposta
+
+            # Regex aprimorada (gananciosa para frase)
+            match_palavra = re.search(r"(?i)^Palavra:\s*\**(.+?)\**\s*$", conteudo, re.MULTILINE)
+            match_frase = re.search(r"(?i)^Frase estoica:\s*\"?(.+)\"?\s*$", conteudo, re.MULTILINE)
 
             if match_palavra and match_frase:
                 palavra = match_palavra.group(1).strip()
                 frase = match_frase.group(1).strip()
 
-                if palavra not in historico["palavras"] and frase not in historico["frases"]:
-                    historico["palavras"].append(palavra)
-                    historico["frases"].append(frase)
+                print(f"DEBUG: Extraído - Palavra='{palavra}', Frase='{frase}'")
 
-                                        # --- CORREÇÃO: UMA ÚNICA ESCRITA LOCAL ---
-                    # Determina o nome base do arquivo local a partir da variável importada
+                # Verificação de repetição (considera case-insensitive para robustez)
+                palavra_lower = palavra.lower()
+                frase_lower = frase.lower()
+                historico_palavras_lower = [p.lower() for p in historico["palavras"]]
+                historico_frases_lower = [f.lower() for f in historico["frases"]]
+
+                if palavra_lower not in historico_palavras_lower and frase_lower not in historico_frases_lower:
+                    print("INFO: Conteúdo inédito encontrado!")
+                    historico["palavras"].append(palavra) # Salva a versão original
+                    historico["frases"].append(frase)   # Salva a versão original
+
+                    # --- Bloco de salvar local e fazer upload (já corrigido) ---
                     local_filename_to_save = HISTORICO_FILE_PATH.split('/')[-1]
                     local_full_path = os.path.abspath(local_filename_to_save)
-
                     try:
-                        # Salva o histórico atualizado no arquivo local (usando o nome base)
                         with open(local_filename_to_save, "w", encoding="utf-8") as f:
                             print(f"DEBUG: Salvando no arquivo local '{local_filename_to_save}': {historico}")
                             json.dump(historico, f, indent=2, ensure_ascii=False)
                             print(f"✅ Histórico salvo localmente em: {local_full_path}")
-
                     except Exception as save_err:
                         print(f"❌ Erro ao salvar o arquivo local '{local_filename_to_save}': {save_err}")
-                        # Considerar se deve parar aqui ou continuar para o upload
-                        # return "Erro ao salvar histórico local." # Exemplo
+                        # Continua para tentar o upload mesmo se salvar falhar localmente? Ou retorna erro?
+                        # return "Erro ao salvar histórico local." # Opção
 
-                    # --- TENTA O UPLOAD APÓS SALVAR E FECHAR O ARQUIVO ---
-                    # (Este bloco try/except é o mesmo que você já tinha, apenas movido para fora do 'with open')
                     try:
-                        # Usa a variável importada/definida que contém o *caminho no repo*
                         print(f"Tentando enviar o arquivo '{HISTORICO_FILE_PATH}' para o GitHub...")
-                        # Chama a função do outro arquivo
                         status, resp_json = upload_to_github()
                         if status == 201 or status == 200:
                             print(f"✅ Histórico atualizado no GitHub (Status: {status}).")
                         else:
-                            # Imprime a resposta completa do GitHub em caso de erro
                             print(f"⚠️ Erro ao enviar para o GitHub (Status: {status}). Resposta da API:")
-                            # Verifica se resp_json é um dicionário antes de usar json.dumps
-                            if isinstance(resp_json, dict):
-                                print(json.dumps(resp_json, indent=2))
-                            else:
-                                print(resp_json) # Imprime como está se não for dict/JSON
+                            if isinstance(resp_json, dict): print(json.dumps(resp_json, indent=2))
+                            else: print(resp_json)
                     except Exception as upload_err:
                         print(f"❌ Exceção durante a chamada de upload_to_github: {upload_err}")
-                        # import traceback
-                        # traceback.print_exc()
+                    # --- Fim do bloco de upload ---
 
-                    # --- FIM DO BLOCO DE UPLOAD ---
+                    return conteudo # Retorna o conteúdo gerado e salvo com sucesso
+                else:
+                    print(f"⚠️ Conteúdo repetido detectado (Palavra: '{palavra}', Frase: '{frase}'). Tentando novamente...")
 
-                     # Retorna o conteúdo gerado APÓS tentar salvar e fazer upload
-                    return conteudo
+            else:
+                 print(f"⚠️ Regex falhou! Palavra Match: {match_palavra}, Frase Match: {match_frase}")
+                 print(f"Conteúdo original que causou falha na regex:\n{conteudo}")
 
-            # ... (else para quando não extraiu/repetido) ...
+        except Exception as e:
+            print(f"❌ Erro durante a chamada da API Groq ou processamento: {e}")
+            # Decide se quer retornar o erro ou apenas logar e tentar novamente
+            # return f"❌ Erro ao gerar conteúdo diário: {e}" # Opção de parar
+            pass # Continua o loop para a próxima tentativa
 
-        except Exception as e: # Except do try principal da geração
-             # ... (tratamento de erro da geração) ...
-             print(f"❌ Erro ao gerar conteúdo ou processar resposta da IA: {e}")
-             return f"❌ Erro ao gerar conteúdo diário: {e}"
+        # Pequena pausa entre tentativas
+        await asyncio.sleep(2)
 
-        # Adicionado um print se o conteúdo for repetido, dentro do loop
-        if 'palavra' in locals() and 'frase' in locals() and (palavra in historico["palavras"] or frase in historico["frases"]):
-             print(f"⚠️ Conteúdo repetido detectado (Palavra: '{palavra}', Frase: '{frase}'). Tentando novamente...")
-
-        # Pequena pausa para não sobrecarregar a API em caso de repetições rápidas
-        await asyncio.sleep(1)
-
-
-    # Mensagem se o loop terminar sem sucesso
-    print("⚠️ Não foi possível gerar um conteúdo inédito após 10 tentativas.")
-    return "⚠️ Não foi possível gerar um conteúdo inédito após 10 tentativas."
+    # Se o loop terminar sem sucesso
+    print("⚠️ Não foi possível gerar um conteúdo inédito após várias tentativas.")
+    return "⚠️ Não foi possível gerar um conteúdo inédito após várias tentativas."
 
 
 
