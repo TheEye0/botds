@@ -102,16 +102,29 @@ conversas = defaultdict(lambda: deque(maxlen=10)) # Histórico por canal para !a
 
 # Verificação de autorização
 def autorizado(ctx):
-    # Permite se for DM com o usuário autorizado
+    # --- DEBUG LOG ---
+    print(f"--- Autorizado Check ---")
+    print(f"User ID: {ctx.author.id} vs Allowed: {ALLOWED_USER_ID}")
+
     if isinstance(ctx.channel, discord.DMChannel):
-        print(f"DEBUG (autorizado): Verificando DM de {ctx.author.id} contra {ALLOWED_USER_ID}")
-        return ctx.author.id == ALLOWED_USER_ID
-    # Permite se for no servidor autorizado
-    elif ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID:
-        print(f"DEBUG (autorizado): Verificando Guild {ctx.guild.id} contra {ALLOWED_GUILD_ID}")
-        return True
-    print(f"DEBUG (autorizado): Não autorizado - Contexto: Guild={ctx.guild}, Channel={ctx.channel}")
-    return False
+        print(f"Context: DM Channel")
+        is_allowed = (ctx.author.id == ALLOWED_USER_ID)
+        print(f"DM Check Result: {is_allowed}")
+        print(f"--- Fim Autorizado Check ---")
+        return is_allowed
+    elif ctx.guild:
+        print(f"Context: Guild Channel")
+        print(f"Guild ID: {ctx.guild.id} vs Allowed: {ALLOWED_GUILD_ID}")
+        # <<< CORREÇÃO APLICADA AQUI >>>
+        is_allowed = (ctx.guild.id == ALLOWED_GUILD_ID)
+        print(f"Guild Check Result: {is_allowed}")
+        print(f"--- Fim Autorizado Check ---")
+        return is_allowed # Retorna o resultado da comparação
+    else:
+        # Situação inesperada
+        print(f"Context: Unknown (Not DM, Not Guild) - Channel Type: {type(ctx.channel)}")
+        print(f"--- Fim Autorizado Check ---")
+        return False
 
 # Função de busca na web com SerpApi
 def buscar_na_web(consulta):
