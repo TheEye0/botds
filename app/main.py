@@ -84,8 +84,8 @@ else:
 # Configure Google Generative AI Client
 if GOOGLE_AI_API_KEY:
     try:
-    google_client = genai.Client(api_key=GOOGLE_AI_API_KEY)
-    print("✅ Cliente Google Generative AI configurado.")
+        google_client = genai.Client(api_key=GOOGLE_AI_API_KEY)
+        print("✅ Cliente Google Generative AI configurado.")
     except Exception as e:
         google_client = None
         print(f"❌ Erro ao configurar Google Generative AI: {e}")
