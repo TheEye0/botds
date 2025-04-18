@@ -1,3 +1,5 @@
+# app/github_uploader.py
+
 import base64
 import json
 import requests
@@ -8,29 +10,42 @@ load_dotenv()
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
-# Garanta que este é o caminho RELATIVO ao script ou absoluto correto no Render
-HISTORICO_FILE_PATH_LOCAL = os.getenv("HISTORICO_FILE_PATH", "historico.json")
-# Caminho no REPOSITÓRIO GITHUB (pode ser o mesmo ou diferente do local)
-HISTORICO_FILE_PATH_REPO = os.getenv("HISTORICO_FILE_PATH", "historico.json")
+
+# --- CORREÇÃO AQUI ---
+# Define a variável HISTORICO_FILE_PATH que main.py espera importar.
+# Ela deve conter o caminho como ele deve aparecer no repositório GitHub.
+HISTORICO_FILE_PATH = os.getenv("HISTORICO_FILE_PATH", "historico.json")
+# --- FIM DA CORREÇÃO ---
+
+# Variáveis internas para clareza (opcional, poderia usar HISTORICO_FILE_PATH diretamente)
+# Assume que o arquivo local a ser lido/escrito tem o mesmo nome base
+# que o arquivo no repo, mas sem o caminho do repo (ex: 'historico.json')
+HISTORICO_FILE_PATH_LOCAL_BASENAME = HISTORICO_FILE_PATH.split('/')[-1]
+# Caminho completo usado na URL da API do GitHub
+HISTORICO_FILE_PATH_REPO_API = HISTORICO_FILE_PATH
 
 
 def upload_to_github():
-    # --- DEBUG: Imprime o caminho local que será lido ---
-    local_file_full_path = os.path.abspath(HISTORICO_FILE_PATH_LOCAL)
+    # Usa o nome base para operações locais
+    local_file_to_read = HISTORICO_FILE_PATH_LOCAL_BASENAME
+    # Usa o caminho completo do repo para a API
+    repo_file_path_api = HISTORICO_FILE_PATH_REPO_API
+
+    local_file_full_path = os.path.abspath(local_file_to_read)
     print(f"[Uploader DEBUG] Tentando ler o arquivo local em: {local_file_full_path}")
 
-    content = b"" # Começa como bytes vazios
+    content = b""
     encoded_content = ""
     read_error = None
 
     try:
-        # Tenta ler o arquivo local especificado
-        with open(HISTORICO_FILE_PATH_LOCAL, "rb") as f:
+        # Tenta ler o arquivo local pelo nome base
+        with open(local_file_to_read, "rb") as f:
             content = f.read()
-        # --- DEBUG: Imprime o tamanho e uma amostra do conteúdo lido ---
+
         print(f"[Uploader DEBUG] Bytes lidos do arquivo local: {len(content)}")
         if content:
-            print(f"[Uploader DEBUG] Amostra do conteúdo lido (decodificado): {content.decode('utf-8', errors='ignore')[:200]}...") # Mostra os primeiros 200 caracteres
+            print(f"[Uploader DEBUG] Amostra do conteúdo lido (decodificado): {content.decode('utf-8', errors='ignore')[:200]}...")
             encoded_content = base64.b64encode(content).decode()
             print(f"[Uploader DEBUG] Amostra do conteúdo Base64: {encoded_content[:100]}...")
         else:
@@ -39,18 +54,14 @@ def upload_to_github():
     except FileNotFoundError:
         read_error = f"Arquivo local não encontrado em {local_file_full_path}"
         print(f"[Uploader ERROR] {read_error}")
-        # Decide o que fazer: retornar erro ou tentar criar vazio? Por enquanto, retorna erro.
-        return 500, {"message": read_error} # Retorna um erro claro
+        return 500, {"message": read_error}
     except Exception as e:
         read_error = f"Erro ao ler arquivo local {local_file_full_path}: {e}"
         print(f"[Uploader ERROR] {read_error}")
-        # Decide o que fazer: retornar erro ou tentar criar vazio? Por enquanto, retorna erro.
-        return 500, {"message": read_error} # Retorna um erro claro
-
-    # --- Fim do Bloco de Leitura ---
+        return 500, {"message": read_error}
 
     # Usa o caminho do REPOSITÓRIO para a URL da API
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_FILE_PATH_REPO}"
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{repo_file_path_api}"
     print(f"[Uploader DEBUG] URL da API GitHub: {url}")
 
     headers = {
@@ -58,7 +69,6 @@ def upload_to_github():
         "Accept": "application/vnd.github.v3+json",
     }
 
-    # Verifica SHA (como antes)
     sha = None
     try:
         response = requests.get(url, headers=headers)
@@ -68,11 +78,9 @@ def upload_to_github():
         elif response.status_code == 404:
             print("[Uploader DEBUG] Arquivo não existe no repositório (SHA=None). Será criado.")
         else:
-            # Logar erro ao obter SHA, mas continuar sem SHA (tentará criar)
-             print(f"[Uploader WARNING] Erro ao obter SHA (Status: {response.status_code}): {response.text}. Tentando criar o arquivo.")
+            print(f"[Uploader WARNING] Erro ao obter SHA (Status: {response.status_code}): {response.text}. Tentando criar o arquivo.")
     except Exception as e:
-         print(f"[Uploader WARNING] Exceção ao obter SHA: {e}. Tentando criar o arquivo.")
-
+        print(f"[Uploader WARNING] Exceção ao obter SHA: {e}. Tentando criar o arquivo.")
 
     payload = {
         "message": "Atualiza histórico gerado pelo bot",
@@ -82,31 +90,27 @@ def upload_to_github():
     if sha:
         payload["sha"] = sha
 
-    # --- DEBUG: Imprime o payload ANTES de enviar ---
-    # Cuidado: Não imprima o 'content' inteiro se for muito grande ou sensível,
-    # mas verificar se ele está vazio ou não é útil.
     print(f"[Uploader DEBUG] Payload a ser enviado (sem content): { {k: v for k, v in payload.items() if k != 'content'} }")
     print(f"[Uploader DEBUG] Payload 'content' está vazio? {'Sim' if not encoded_content else 'Não'}")
 
-
-    # Envia para o GitHub
     try:
-         r = requests.put(url, headers=headers, json=payload)
-         print(f"[Uploader INFO] Resposta do GitHub PUT - Status: {r.status_code}")
-         # Imprime a resposta do GitHub mesmo em caso de sucesso aparente para análise
-         try:
-             print(f"[Uploader INFO] Resposta JSON do GitHub: {json.dumps(r.json(), indent=2)}")
-         except json.JSONDecodeError:
-             print(f"[Uploader INFO] Resposta não-JSON do GitHub: {r.text}")
-         return r.status_code, r.json() # Retorna como antes, mas logamos acima
+        r = requests.put(url, headers=headers, json=payload)
+        print(f"[Uploader INFO] Resposta do GitHub PUT - Status: {r.status_code}")
+        try:
+            # Tenta imprimir como JSON, senão como texto
+            response_data = r.json()
+            print(f"[Uploader INFO] Resposta JSON do GitHub: {json.dumps(response_data, indent=2)}")
+            # Retorna o status e o JSON decodificado
+            return r.status_code, response_data
+        except json.JSONDecodeError:
+            response_text = r.text
+            print(f"[Uploader INFO] Resposta não-JSON do GitHub: {response_text}")
+            # Retorna status e o texto como mensagem de erro (ou sucesso não-JSON)
+            return r.status_code, {"message": response_text}
     except Exception as e:
-         print(f"[Uploader ERROR] Exceção ao enviar para o GitHub: {e}")
-         return 500, {"message": f"Exceção na requisição PUT: {e}"}
+        print(f"[Uploader ERROR] Exceção ao enviar para o GitHub: {e}")
+        return 500, {"message": f"Exceção na requisição PUT: {e}"}
 
-# Adicione isto se você importar HISTORICO_FILE_PATH em main.py
-# para garantir que a variável esteja disponível para importação
+
 if __name__ == '__main__':
-    print("Este script é feito para ser importado, mas pode ser executado para testes.")
-    # Você poderia adicionar um teste simples aqui se quisesse
-    # status, resp = upload_to_github()
-    # print(f"Teste de execução direta - Status: {status}, Resposta: {resp}")
+    print("Este script é feito para ser importado.")
