@@ -24,6 +24,13 @@ import io      # Para lidar com bytes de imagem
 from PIL import Image # Pillow é necessário para processar a imagem de entrada/saída
 import traceback # Para logs de erro detalhados
 
+# <<< ADICIONAR: Verificar versão da biblioteca >>>
+try:
+    print(f"--- Google Generative AI Version: {genai.__version__} ---")
+except Exception as e:
+    print(f"--- Não foi possível obter a versão de google-generativeai: {e} ---")
+
+
 # Módulo local para upload
 try:
     from github_uploader import upload_to_github, HISTORICO_FILE_PATH # Garante que HISTORICO_FILE_PATH é importado
@@ -264,6 +271,7 @@ async def testar_conteudo(ctx):
 # --- Comando !img ---
 @bot.command()
 async def img(ctx, *, prompt: str):
+    print(f"\n--- !img START - Ctx ID: {ctx.message.id} ---")
     if not GOOGLE_AI_API_KEY:
         return await ctx.send("❌ A API de imagem não está configurada (sem chave).")
     if not autorizado(ctx):
@@ -284,115 +292,107 @@ async def img(ctx, *, prompt: str):
                             image_bytes = await resp.read()
                             input_pil_image = Image.open(io.BytesIO(image_bytes))
                             input_filename = attachment.filename
-                            print(f"DEBUG (!img): Imagem '{input_filename}' baixada e carregada ({len(image_bytes)} bytes).")
+                            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem '{input_filename}' baixada ({len(image_bytes)} bytes).")
                         else:
-                            await ctx.send(f"❌ Falha ao baixar a imagem anexada (status: {resp.status}).")
+                            await ctx.send(f"❌ Falha ao baixar anexo (status: {resp.status}).")
                             return
             except Exception as e:
-                await ctx.send(f"❌ Erro ao baixar ou processar anexo: {e}")
-                print(f"Erro detalhado ao processar anexo (!img): {e}")
-                traceback.print_exc()
-                return
+                await ctx.send(f"❌ Erro ao processar anexo: {e}")
+                print(f"Erro detalhado (!img): {e}"); traceback.print_exc(); return
         else:
-            await ctx.send(f"⚠️ O anexo '{attachment.filename}' não é um tipo de imagem suportado (png, jpg, webp). Ignorando anexo.")
+            await ctx.send(f"⚠️ Anexo '{attachment.filename}' não suportado. Ignorando.")
 
     # Mensagem de feedback
-    if input_pil_image:
-        await ctx.send(f"⏳ Editando imagem '{input_filename}' com o prompt: '{prompt}'...")
-    else:
-        await ctx.send(f"⏳ Gerando imagem nova com o prompt: '{prompt}'...")
+    if input_pil_image: await ctx.send(f"⏳ Editando imagem '{input_filename}'...")
+    else: await ctx.send(f"⏳ Gerando imagem nova...")
 
     # 2. Preparar 'contents' e chamar a API Gemini
     try:
         contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
 
-        # <<< CORREÇÃO: Usar genai_types.GenerateContentConfig >>>
-        # Cria o objeto de configuração usando o tipo específico da documentação
+        # <<< CORREÇÃO APLICADA: Usar genai_types.GenerateContentConfig >>>
+        generation_config_obj = None
         try:
             generation_config_obj = genai_types.GenerateContentConfig(
                 response_modalities=['TEXT', 'IMAGE']
             )
-            print("DEBUG (!img): Usando genai_types.GenerateContentConfig")
+            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Usando genai_types.GenerateContentConfig")
         except Exception as e_config:
-            print(f"ERRO CRÍTICO (!img): Falha ao criar genai_types.GenerateContentConfig: {e_config}")
+            print(f"ERRO CRÍTICO (!img - Ctx ID: {ctx.message.id}): Falha ao criar genai_types.GenerateContentConfig: {e_config}")
             traceback.print_exc()
-            await ctx.send("❌ Erro interno na configuração da API de imagem (tipo config).")
+            await ctx.send("❌ Erro config API imagem (tipo config).")
             return
-        # <<< FIM DA CRIAÇÃO DA CONFIG >>>
 
-        gemini_model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash-exp-image-generation"
-        )
+        gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
 
-        print(f"DEBUG (!img): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}")
+        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}")
 
+        response = None
         async with ctx.typing():
-            # <<< CORREÇÃO: Passar o objeto generation_config_obj criado >>>
+            # Passa o objeto de configuração criado
             response = await gemini_model.generate_content_async(
                 contents=contents_for_api,
                 generation_config=generation_config_obj # Passa o objeto criado
             )
-            # <<< FIM DA CORREÇÃO NA CHAMADA >>>
-        print("DEBUG (!img): Resposta recebida da API Gemini.")
+        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): RESPOSTA recebida da API Gemini.")
+        if response: print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Candidates? { hasattr(response, 'candidates') } | Feedback? { hasattr(response, 'prompt_feedback') }")
 
-        # 3. Processar a Resposta (código existente)
+        # 3. Processar a Resposta
         response_text_parts = []
         generated_image_bytes = None
-        if response.candidates:
+        if response and response.candidates:
              if hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        response_text_parts.append(part.text)
+                print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Processando {len(response.candidates[0].content.parts)} partes.")
+                for i, part in enumerate(response.candidates[0].content.parts):
+                    part_info = f"Part {i}:"
+                    if hasattr(part, 'text') and part.text: part_info += " [TEXT]"
+                    if hasattr(part, 'inline_data'): part_info += f" [INLINE_DATA - Mime: {getattr(part.inline_data, 'mime_type', 'N/A')}, Data? {hasattr(part.inline_data, 'data')}]"
+                    print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): {part_info}")
+                    if hasattr(part, 'text') and part.text: response_text_parts.append(part.text)
                     elif hasattr(part, 'inline_data') and part.inline_data and generated_image_bytes is None:
-                        if hasattr(part.inline_data, 'data'):
-                             generated_image_bytes = part.inline_data.data
-                             print(f"DEBUG (!img): Imagem inline_data encontrada ({len(generated_image_bytes)} bytes). MimeType: {part.inline_data.mime_type}")
-                        else:
-                             print("WARN (!img): part.inline_data sem atributo 'data'.")
+                        if hasattr(part.inline_data, 'data'): generated_image_bytes = part.inline_data.data; print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem inline_data ARMAZENADA ({len(generated_image_bytes)} bytes).")
+                        else: print(f"WARN (!img - Ctx ID: {ctx.message.id}): part.inline_data sem 'data'.")
              else:
-                 candidate_info = response.candidates[0]
-                 finish_reason = getattr(candidate_info, 'finish_reason', 'N/A')
-                 safety_ratings = getattr(candidate_info, 'safety_ratings', 'N/A')
-                 print(f"WARN (!img): Estrutura inesperada (sem content/parts). FinishReason: {finish_reason}, Safety: {safety_ratings}")
-                 if hasattr(candidate_info, 'text'):
-                     response_text_parts.append(candidate_info.text)
-                 else:
-                      response_text_parts.append(f"⚠️ Resposta da API incompleta ou bloqueada. Razão: {finish_reason}")
+                 candidate_info = response.candidates[0]; finish_reason = getattr(candidate_info, 'finish_reason', 'N/A'); safety_ratings = getattr(candidate_info, 'safety_ratings', 'N/A')
+                 print(f"WARN (!img - Ctx ID: {ctx.message.id}): Estrutura inesperada. FinishReason: {finish_reason}, Safety: {safety_ratings}")
+                 if hasattr(candidate_info, 'text'): response_text_parts.append(candidate_info.text)
+                 else: response_text_parts.append(f"⚠️ Resposta incompleta/bloqueada. Razão: {finish_reason}")
         else:
             feedback = "N/A"
-            if hasattr(response, 'prompt_feedback'):
+            if response and hasattr(response, 'prompt_feedback'):
                  block_reason = getattr(response.prompt_feedback, 'block_reason', None)
-                 if block_reason:
-                     feedback = f"Prompt bloqueado. Razão: {block_reason}"
-                 else:
-                     feedback = str(response.prompt_feedback)
-            print(f"WARN (!img): Nenhuma 'candidate' na resposta. Prompt Feedback: {feedback}")
-            response_text_parts.append(f"⚠️ A API não retornou um candidato válido. {feedback}")
+                 feedback = f"Prompt bloqueado. Razão: {block_reason}" if block_reason else str(response.prompt_feedback)
+            print(f"WARN (!img - Ctx ID: {ctx.message.id}): Nenhuma 'candidate'. Feedback: {feedback}")
+            response_text_parts.append(f"⚠️ API não retornou candidato. {feedback}")
 
-        # 4. Enviar Resultados para o Discord (código existente)
+        # 4. Enviar Resultados para o Discord
         final_response_text = "\n".join(response_text_parts).strip()
+        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Texto final: '{final_response_text[:100]}...' | Imagem? {'Sim' if generated_image_bytes else 'Não'}")
         if generated_image_bytes:
-            print("DEBUG (!img): Enviando imagem gerada para o Discord.")
+            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Enviando imagem...")
             img_file = discord.File(io.BytesIO(generated_image_bytes), filename="gemini_image.png")
             if final_response_text:
-                if len(final_response_text) > 1900:
-                    final_response_text = final_response_text[:1900] + "..."
+                if len(final_response_text) > 1900: final_response_text = final_response_text[:1900] + "..."
                 await ctx.send(f"{final_response_text}", file=img_file)
             else:
                 await ctx.send(f"🖼️ Imagem para '{prompt}':", file=img_file)
+            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem enviada.")
         elif final_response_text:
-            print("DEBUG (!img): Nenhuma imagem gerada/encontrada, enviando apenas texto.")
-            if len(final_response_text) > 2000:
-                final_response_text = final_response_text[:1990] + "\n[...]"
+            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Enviando APENAS texto...")
+            if len(final_response_text) > 2000: final_response_text = final_response_text[:1990] + "\n[...]"
             await ctx.send(f"{final_response_text}")
+            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Texto enviado.")
         else:
-            print("ERROR (!img): Nenhuma imagem ou texto na resposta final.")
-            await ctx.send("❌ A API não retornou texto ou imagem válidos após o processamento.")
+            print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Nenhuma imagem ou texto após processamento.")
+            await ctx.send("❌ API não retornou conteúdo válido.")
 
     except Exception as e:
-        print(f"❌ Erro durante a chamada/processamento da API Gemini (!img): {e}")
-        traceback.print_exc() # IMPORTANTE: Verifique este erro nos logs do Render!
-        await ctx.send(f"❌ Ocorreu um erro interno ao processar o comando !img.") # Mensagem genérica
+        print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Entrou no bloco EXCEPT GERAL.")
+        print(f"❌ Erro durante chamada/processamento API Gemini (!img): {e}")
+        traceback.print_exc()
+        await ctx.send(f"❌ Ocorreu um erro interno ao processar o comando !img.")
+
+    print(f"--- !img END - Ctx ID: {ctx.message.id} ---")
 
 
 # --- Task de Conteúdo Diário ---
