@@ -290,11 +290,13 @@ async def testar_conteudo(ctx):
 @bot.command()
 async def img(ctx, *, prompt: str):
     print(f"\n--- !img START - Ctx ID: {ctx.message.id} ---")
-    if not GOOGLE_AI_API_KEY:
-        return await ctx.send("❌ A API de imagem não está configurada (sem chave).")
+    if not google_client_configured: # Usa o flag definido na inicialização
+        return await ctx.send("❌ A API Google não está configurada corretamente.")
     if not autorizado(ctx):
         return await ctx.send("❌ Comando não autorizado.")
 
+    input_pil_image = None; input_filename = "input_image"
+    
     # Feedback inicial
     await ctx.send("⏳ Gerando imagem…")
 
@@ -311,13 +313,26 @@ async def img(ctx, *, prompt: str):
             contents.append({"parts": [{"inlineData": {"data": b64}}]})
 
         # 2. Chama a Gemini API para gerar texto+imagem em modo nativo
-        response = google_client.generate_content( # Usa google_client e chama generate_content diretamente
-            model="models/gemini-2.0-flash-exp-image-generation", # Usa 'models/' prefix? Verificar!
-            contents=contents,
-            generation_config=genai.GenerationConfig( # Passa a config aqui
+        try:
+            contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
+            gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
+            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}")
+            generation_config_obj = genai.GenerationConfig( # Passa a config aqui
                 response_modalities=["TEXT", "IMAGE"]
             )
         )
+
+        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Tentando usar config: {generation_config_obj}")
+
+        response = None
+        async with ctx.typing():
+             # Passa o objeto config criado
+             response = await gemini_model.generate_content_async(
+                 contents=contents_for_api,
+                 generation_config=generation_config_obj
+             )
+
+        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): RESPOSTA recebida da API Gemini.")
 
         # 3. Itera pelas partes e separa texto x imagem
         final_text = []
@@ -341,6 +356,43 @@ async def img(ctx, *, prompt: str):
         print(f"ERROR (!img): {e}")
         traceback.print_exc()
         await ctx.send(f"❌ Erro ao gerar ou processar imagem: {e}")
+
+    print(f"--- !img END - Ctx ID: {ctx.message.id} ---")
+
+ except TypeError as te: # <<< CAPTURA ESPECÍFICA DO TYPEERROR >>>
+        print(f"ERROR (!img - Ctx ID: {ctx.message.id}): TypeError indica problema na config! Erro: {te}")
+        traceback.print_exc()
+        if 'response_modalities' in str(te):
+             await ctx.send("❌ Erro: A versão da biblioteca não suporta 'response_modalities' na configuração. Tentando sem...")
+             # --- TENTATIVA SEM CONFIG EXPLÍCITA ---
+             try:
+                 print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Tentando chamada SEM config explícita...")
+                 async with ctx.typing():
+                      # REPETE A CHAMADA, MAS SEM generation_config
+                      response = await gemini_model.generate_content_async(contents=contents_for_api)
+                 print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): RESPOSTA recebida (sem config).")
+                 # --- REPETIR O PROCESSAMENTO DA RESPOSTA AQUI ---
+                 response_text_parts = []
+                 generated_image_bytes = None
+                 processed_successfully = False
+                 # ... (COLE O BLOCO INTEIRO DE PROCESSAMENTO DA RESPOSTA AQUI - seção 3) ...
+                 # --- REPETIR O ENVIO PARA DISCORD AQUI ---
+                 final_response_text_str = "\n".join(response_text_parts).strip()
+                 # ... (COLE O BLOCO INTEIRO DE ENVIO AQUI - seção 4) ...
+
+             except Exception as e_fallback:
+                  print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Erro mesmo na tentativa SEM config: {e_fallback}")
+                  traceback.print_exc()
+                  await ctx.send(f"❌ Falhou ao tentar gerar imagem mesmo sem config explícita.")
+        else:
+              # Outro TypeError não relacionado a response_modalities
+              await ctx.send(f"❌ Erro interno (TypeError) ao processar imagem: {te}")
+
+    except Exception as e: # Captura outros erros (rede, API, etc)
+        print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Entrou no bloco EXCEPT GERAL.")
+        print(f"❌ Erro: {e}")
+        traceback.print_exc()
+        await ctx.send(f"❌ Ocorreu um erro interno ao executar o comando !img.")
 
     print(f"--- !img END - Ctx ID: {ctx.message.id} ---")
 
