@@ -224,37 +224,49 @@ Reflexão: ...
                     historico["palavras"].append(palavra)
                     historico["frases"].append(frase)
 
-                    # Salva localmente e depois tenta o upload DENTRO do 'with'
-                    with open("historico.json", "w", encoding="utf-8") as f:
-                        json.dump(historico, f, indent=2, ensure_ascii=False)
-                        print("✅ Histórico salvo localmente em:", os.path.abspath("historico.json"))
+                                        # --- CORREÇÃO: UMA ÚNICA ESCRITA LOCAL ---
+                    # Determina o nome base do arquivo local a partir da variável importada
+                    local_filename_to_save = HISTORICO_FILE_PATH.split('/')[-1]
+                    local_full_path = os.path.abspath(local_filename_to_save)
 
-                      # Abre para escrita LOCAL
-                    with open(HISTORICO_FILE_PATH.split('/')[-1], "w", encoding="utf-8") as f: # Salva localmente com o nome base
-                        print(f"DEBUG: Salvando no {HISTORICO_FILE_PATH.split('/')[-1]} local: {historico}")
-                        json.dump(historico, f, indent=2, ensure_ascii=False)
-                        print(f"✅ Histórico salvo localmente em: {os.path.abspath(HISTORICO_FILE_PATH.split('/')[-1])}")
+                    try:
+                        # Salva o histórico atualizado no arquivo local (usando o nome base)
+                        with open(local_filename_to_save, "w", encoding="utf-8") as f:
+                            print(f"DEBUG: Salvando no arquivo local '{local_filename_to_save}': {historico}")
+                            json.dump(historico, f, indent=2, ensure_ascii=False)
+                            print(f"✅ Histórico salvo localmente em: {local_full_path}")
 
-                        # --- SUBSTITUA O TRY/EXCEPT DO UPLOAD AQUI ---
-                        # Bloco de código fornecido para fazer o upload e logar detalhes
-                        try:
-                            # Usa a variável importada/definida que contém o *caminho no repo*
-                            print(f"Tentando enviar {HISTORICO_FILE_PATH} para o GitHub...")
-                            # Chama a função do outro arquivo
-                            status, resp_json = upload_to_github() # Renomeado 'resp' para 'resp_json'
-                            if status == 201 or status == 200:
-                                print(f"✅ Histórico atualizado no GitHub (Status: {status}).")
+                    except Exception as save_err:
+                        print(f"❌ Erro ao salvar o arquivo local '{local_filename_to_save}': {save_err}")
+                        # Considerar se deve parar aqui ou continuar para o upload
+                        # return "Erro ao salvar histórico local." # Exemplo
+
+                    # --- TENTA O UPLOAD APÓS SALVAR E FECHAR O ARQUIVO ---
+                    # (Este bloco try/except é o mesmo que você já tinha, apenas movido para fora do 'with open')
+                    try:
+                        # Usa a variável importada/definida que contém o *caminho no repo*
+                        print(f"Tentando enviar o arquivo '{HISTORICO_FILE_PATH}' para o GitHub...")
+                        # Chama a função do outro arquivo
+                        status, resp_json = upload_to_github()
+                        if status == 201 or status == 200:
+                            print(f"✅ Histórico atualizado no GitHub (Status: {status}).")
+                        else:
+                            # Imprime a resposta completa do GitHub em caso de erro
+                            print(f"⚠️ Erro ao enviar para o GitHub (Status: {status}). Resposta da API:")
+                            # Verifica se resp_json é um dicionário antes de usar json.dumps
+                            if isinstance(resp_json, dict):
+                                print(json.dumps(resp_json, indent=2))
                             else:
-                                # Imprime a resposta completa do GitHub em caso de erro
-                                print(f"⚠️ Erro ao enviar para o GitHub (Status: {status}). Resposta da API:")
-                                print(json.dumps(resp_json, indent=2)) # Imprime o JSON de erro formatado
-                        except Exception as upload_err:
-                            print(f"❌ Exceção durante a chamada de upload_to_github: {upload_err}")
-                            # import traceback
-                            # traceback.print_exc() # Descomente para obter rastreamento completo se necessário
-                        # --- FIM DO BLOCO SUBSTITUÍDO ---
+                                print(resp_json) # Imprime como está se não for dict/JSON
+                    except Exception as upload_err:
+                        print(f"❌ Exceção durante a chamada de upload_to_github: {upload_err}")
+                        # import traceback
+                        # traceback.print_exc()
 
-                    return conteudo # Retorna o conteúdo se tudo deu certo
+                    # --- FIM DO BLOCO DE UPLOAD ---
+
+                     # Retorna o conteúdo gerado APÓS tentar salvar e fazer upload
+                    return conteudo
 
             # ... (else para quando não extraiu/repetido) ...
 
