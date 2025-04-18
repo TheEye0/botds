@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 from groq import Groq
 from serpapi import GoogleSearch
 import google.generativeai as genai
-from google.genai import types
 import aiohttp # Para baixar imagens
 import io      # Para lidar com bytes de imagem
 from PIL import Image # Pillow é necessário para processar a imagem de entrada/saída
