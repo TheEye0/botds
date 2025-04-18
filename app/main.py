@@ -642,8 +642,8 @@ def run_server():
     # O Render define a porta na variável de ambiente PORT
     port = int(os.environ.get("PORT", 10000)) # Render free tier usa 10000 às vezes
     print(f"INFO: Iniciando servidor Flask na porta {port}")
-    # Desabilita logs do Flask para não poluir
-    app.run(host="0.0.0.0", port=port, use_reloader=False, log_output=False, static_files={})
+    # CORREÇÃO: Removido 'log_output=False' e 'static_files={}' (não necessário aqui)
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # ------ Início da aplicação ------
 if __name__ == "__main__":
