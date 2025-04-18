@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 # API Clients and specific imports
 from groq import Groq
 from serpapi import GoogleSearch
-from google import genai
+import google.generativeai as genai
 from google.genai import types
 import aiohttp # Para baixar imagens
 import io      # Para lidar com bytes de imagem
