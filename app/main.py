@@ -325,7 +325,7 @@ async def img(ctx, *, prompt: str):
         response_text_parts = []
         generated_image_bytes = None
         processed_successfully = False
-         try:
+        try:
             if response and response.candidates:
                  # Checa se a resposta foi bloqueada ANTES de tentar acessar partes
                  if hasattr(response.candidates[0], 'finish_reason') and response.candidates[0].finish_reason != 1: # 1 = STOP (normal)
