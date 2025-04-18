@@ -16,7 +16,7 @@ import asyncio
 from discord.ext import tasks
 import json
 import re
-from github_uploader import upload_to_github
+from github_uploader import upload_to_github, HISTORICO_FILE_PATH
 
 conversas = defaultdict(lambda: deque(maxlen=10))
 
@@ -229,37 +229,39 @@ Reflexão: ...
                         json.dump(historico, f, indent=2, ensure_ascii=False)
                         print("✅ Histórico salvo localmente em:", os.path.abspath("historico.json"))
 
-                        # --- INÍCIO DO BLOCO MOVIDO E CORRIGIDO ---
-                        try: # Adiciona um try/except específico para o upload (opcional, mas bom)
-                            print("Tentando enviar historico.json para o GitHub...")
-                            status, resp = upload_to_github()
+                      # Abre para escrita LOCAL
+                    with open(HISTORICO_FILE_PATH.split('/')[-1], "w", encoding="utf-8") as f: # Salva localmente com o nome base
+                        print(f"DEBUG: Salvando no {HISTORICO_FILE_PATH.split('/')[-1]} local: {historico}")
+                        json.dump(historico, f, indent=2, ensure_ascii=False)
+                        print(f"✅ Histórico salvo localmente em: {os.path.abspath(HISTORICO_FILE_PATH.split('/')[-1])}")
+
+                        # --- SUBSTITUA O TRY/EXCEPT DO UPLOAD AQUI ---
+                        # Bloco de código fornecido para fazer o upload e logar detalhes
+                        try:
+                            # Usa a variável importada/definida que contém o *caminho no repo*
+                            print(f"Tentando enviar {HISTORICO_FILE_PATH} para o GitHub...")
+                            # Chama a função do outro arquivo
+                            status, resp_json = upload_to_github() # Renomeado 'resp' para 'resp_json'
                             if status == 201 or status == 200:
-                                print("✅ Histórico atualizado no GitHub.")
+                                print(f"✅ Histórico atualizado no GitHub (Status: {status}).")
                             else:
-                                # Imprime mais detalhes do erro do GitHub
-                                print(f"⚠️ Erro ao enviar para o GitHub (Status: {status}): {resp}")
+                                # Imprime a resposta completa do GitHub em caso de erro
+                                print(f"⚠️ Erro ao enviar para o GitHub (Status: {status}). Resposta da API:")
+                                print(json.dumps(resp_json, indent=2)) # Imprime o JSON de erro formatado
                         except Exception as upload_err:
-                            print(f"❌ Exceção durante o upload para o GitHub: {upload_err}")
-                        # --- FIM DO BLOCO MOVIDO E CORRIGIDO ---
+                            print(f"❌ Exceção durante a chamada de upload_to_github: {upload_err}")
+                            # import traceback
+                            # traceback.print_exc() # Descomente para obter rastreamento completo se necessário
+                        # --- FIM DO BLOCO SUBSTITUÍDO ---
 
-                    return conteudo # Retorna o conteúdo se tudo deu certo (save local + tentativa de upload)
+                    return conteudo # Retorna o conteúdo se tudo deu certo
 
-            # Este else agora está no lugar certo em relação ao except principal
-            else:
-                print("⚠️ Não foi possível extrair a palavra ou frase do conteúdo gerado:")
-                print(conteudo)
-                # Corrigido: a lógica de impressão de repetido estava fora do lugar
-                # Removido as linhas abaixo daqui pois 'palavra' e 'frase' podem não existir se o regex falhou
-                # print("⚠️ Conteúdo repetido detectado.")
-                # print("Palavra:", palavra)
-                # print("Frase:", frase)
+            # ... (else para quando não extraiu/repetido) ...
 
-        # Este except agora segue corretamente o bloco try principal
-        except Exception as e:
-            # Mensagem mais específica para erro na geração/processamento
-            print(f"❌ Erro ao gerar conteúdo ou processar resposta da IA: {e}")
-            # Mantém o retorno original para sinalizar falha na geração
-            return f"❌ Erro ao gerar conteúdo diário: {e}"
+        except Exception as e: # Except do try principal da geração
+             # ... (tratamento de erro da geração) ...
+             print(f"❌ Erro ao gerar conteúdo ou processar resposta da IA: {e}")
+             return f"❌ Erro ao gerar conteúdo diário: {e}"
 
         # Adicionado um print se o conteúdo for repetido, dentro do loop
         if 'palavra' in locals() and 'frase' in locals() and (palavra in historico["palavras"] or frase in historico["frases"]):
