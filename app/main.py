@@ -310,60 +310,65 @@ async def img(ctx, *, prompt: str):
     try:
         contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
 
-        # <<< CORREÇÃO APLICADA: Usar genai_types.GenerateContentConfig >>>
-        generation_config_obj = None
-        try:
-            generation_config_obj = genai_types.GenerateContentConfig(
-                response_modalities=['TEXT', 'IMAGE']
-            )
-            print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Usando genai_types.GenerateContentConfig")
-        except Exception as e_config:
-            print(f"ERRO CRÍTICO (!img - Ctx ID: {ctx.message.id}): Falha ao criar genai_types.GenerateContentConfig: {e_config}")
-            traceback.print_exc()
-            await ctx.send("❌ Erro config API imagem (tipo config).")
-            return
 
-        gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
+       gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
 
-        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}")
+        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Chamando Gemini SEM config explícita. Contents: {[type(c).__name__ for c in contents_for_api]}")
 
         response = None
         async with ctx.typing():
-            # Passa o objeto de configuração criado
-            response = await gemini_model.generate_content_async(
-                contents=contents_for_api,
-                generation_config=generation_config_obj # Passa o objeto criado
-            )
+            response = await gemini_model.generate_content_async(contents=contents_for_api)
+
         print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): RESPOSTA recebida da API Gemini.")
         if response: print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Candidates? { hasattr(response, 'candidates') } | Feedback? { hasattr(response, 'prompt_feedback') }")
 
         # 3. Processar a Resposta
         response_text_parts = []
         generated_image_bytes = None
-        if response and response.candidates:
-             if hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
-                print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Processando {len(response.candidates[0].content.parts)} partes.")
-                for i, part in enumerate(response.candidates[0].content.parts):
-                    part_info = f"Part {i}:"
-                    if hasattr(part, 'text') and part.text: part_info += " [TEXT]"
-                    if hasattr(part, 'inline_data'): part_info += f" [INLINE_DATA - Mime: {getattr(part.inline_data, 'mime_type', 'N/A')}, Data? {hasattr(part.inline_data, 'data')}]"
-                    print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): {part_info}")
-                    if hasattr(part, 'text') and part.text: response_text_parts.append(part.text)
-                    elif hasattr(part, 'inline_data') and part.inline_data and generated_image_bytes is None:
-                        if hasattr(part.inline_data, 'data'): generated_image_bytes = part.inline_data.data; print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem inline_data ARMAZENADA ({len(generated_image_bytes)} bytes).")
-                        else: print(f"WARN (!img - Ctx ID: {ctx.message.id}): part.inline_data sem 'data'.")
-             else:
-                 candidate_info = response.candidates[0]; finish_reason = getattr(candidate_info, 'finish_reason', 'N/A'); safety_ratings = getattr(candidate_info, 'safety_ratings', 'N/A')
-                 print(f"WARN (!img - Ctx ID: {ctx.message.id}): Estrutura inesperada. FinishReason: {finish_reason}, Safety: {safety_ratings}")
-                 if hasattr(candidate_info, 'text'): response_text_parts.append(candidate_info.text)
-                 else: response_text_parts.append(f"⚠️ Resposta incompleta/bloqueada. Razão: {finish_reason}")
-        else:
-            feedback = "N/A"
-            if response and hasattr(response, 'prompt_feedback'):
-                 block_reason = getattr(response.prompt_feedback, 'block_reason', None)
-                 feedback = f"Prompt bloqueado. Razão: {block_reason}" if block_reason else str(response.prompt_feedback)
-            print(f"WARN (!img - Ctx ID: {ctx.message.id}): Nenhuma 'candidate'. Feedback: {feedback}")
-            response_text_parts.append(f"⚠️ API não retornou candidato. {feedback}")
+        processed_successfully = False
+         try:
+            if response and response.candidates:
+                 # Checa se a resposta foi bloqueada ANTES de tentar acessar partes
+                 if hasattr(response.candidates[0], 'finish_reason') and response.candidates[0].finish_reason != 1: # 1 = STOP (normal)
+                      reason_num = response.candidates[0].finish_reason
+                      safety_ratings_str = str(getattr(response.candidates[0], 'safety_ratings', 'N/A'))
+                      error_msg = f"⚠️ Geração interrompida/bloqueada. Razão: {reason_num}. Safety: {safety_ratings_str}"
+                      print(f"WARN (!img - Ctx ID: {ctx.message.id}): {error_msg}")
+                      response_text_parts.append(error_msg)
+                 # Só tenta processar partes se não foi bloqueado e tem conteúdo
+                 elif hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
+                    print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Processando {len(response.candidates[0].content.parts)} partes.")
+                    for i, part in enumerate(response.candidates[0].content.parts):
+                        part_info = f"Part {i}:"
+                        if hasattr(part, 'text') and part.text: part_info += " [TEXT]"
+                        if hasattr(part, 'inline_data'): part_info += f" [INLINE_DATA - Mime: {getattr(part.inline_data, 'mime_type', 'N/A')}, Data? {hasattr(part.inline_data, 'data')}]"
+                        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): {part_info}")
+
+                        if hasattr(part, 'text') and part.text:
+                            response_text_parts.append(part.text)
+                            processed_successfully = True # Processou texto
+                        elif hasattr(part, 'inline_data') and part.inline_data and generated_image_bytes is None:
+                            if hasattr(part.inline_data, 'data'):
+                                 generated_image_bytes = part.inline_data.data
+                                 print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Imagem inline_data ARMAZENADA ({len(generated_image_bytes)} bytes).")
+                                 processed_successfully = True # Processou imagem
+                            else: print(f"WARN (!img - Ctx ID: {ctx.message.id}): part.inline_data sem 'data'.")
+                 else:
+                     print(f"WARN (!img - Ctx ID: {ctx.message.id}): Resposta válida, mas sem 'content' ou 'parts'.")
+            else: # Nenhuma candidate ou resposta inválida
+                feedback = "N/A"
+                if response and hasattr(response, 'prompt_feedback'):
+                     # ... (código para obter feedback) ...
+                print(f"WARN (!img - Ctx ID: {ctx.message.id}): Nenhuma 'candidate'. Feedback: {feedback}")
+                response_text_parts.append(f"⚠️ API não retornou candidato. {feedback}")
+
+        except Exception as proc_err:
+             print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Erro ao PROCESSAR resposta da API.")
+             print(f"❌ Erro: {proc_err}")
+             traceback.print_exc()
+             await ctx.send(f"❌ Ocorreu um erro interno ao processar a resposta da API de imagem.")
+             print(f"--- !img END (ERRO PROC) - Ctx ID: {ctx.message.id} ---")
+             return # Sai da função se o processamento falhar
 
         # 4. Enviar Resultados para o Discord
         final_response_text = "\n".join(response_text_parts).strip()
@@ -388,7 +393,7 @@ async def img(ctx, *, prompt: str):
 
     except Exception as e:
         print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Entrou no bloco EXCEPT GERAL.")
-        print(f"❌ Erro durante chamada/processamento API Gemini (!img): {e}")
+        print(f"❌ Erro: {e}")
         traceback.print_exc()
         await ctx.send(f"❌ Ocorreu um erro interno ao processar o comando !img.")
 
