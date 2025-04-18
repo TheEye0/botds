@@ -387,8 +387,7 @@ async def img(ctx, *, prompt: str):
 
         async with ctx.typing():
             response = await gemini_model.generate_content_async(
-                contents=contents_for_api,
-                generation_config=generation_config,
+                contents=contents_for_api
             )
         print("DEBUG (!img): Resposta recebida da API Gemini.")
 
