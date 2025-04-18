@@ -320,7 +320,6 @@ async def img(ctx, *, prompt: str):
             generation_config_obj = genai.GenerationConfig( # Passa a config aqui
                 response_modalities=["TEXT", "IMAGE"]
                 )
-            )
 
         print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Tentando usar config: {generation_config_obj}")
 
