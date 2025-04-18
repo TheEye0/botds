@@ -17,6 +17,11 @@ from discord.ext import tasks
 import json
 import re
 from github_uploader import upload_to_github, HISTORICO_FILE_PATH
+import google.generativeai as genai
+from google.generativeai import types as genai_types # Renomeado para evitar conflito
+import aiohttp
+import io
+from PIL import Image # Pillow é necessário para processar a imagem de entrada/saída
 
 conversas = defaultdict(lambda: deque(maxlen=10))
 
@@ -32,10 +37,21 @@ bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 # Chaves das APIs (deixe no .env)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")  # Lembre de adicionar ao .env
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")  
+GOOGLE_AI_API_KEY = os.getenv("GOOGLE_AI_API_KEY")
 
 # Inicializa o cliente Groq
 groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Configure o cliente genai (faça isso uma vez, talvez perto de onde configura o Groq)
+if GOOGLE_AI_API_KEY:
+    try:
+        genai.configure(api_key=GOOGLE_AI_API_KEY)
+        print("✅ Cliente Google Generative AI configurado.")
+    except Exception as e:
+        print(f"❌ Erro ao configurar Google Generative AI: {e}")
+else:
+    print("⚠️ Chave GOOGLE_AI_API_KEY não encontrada no ambiente.")
 
 # Função de busca na web com SerpApi
 def buscar_na_web(consulta):
@@ -152,10 +168,139 @@ async def testar_conteudo(ctx):
     conteudo = await gerar_conteudo_com_ia()
     await ctx.send(conteudo)
 
-
 # Armazena histórico para evitar repetições
 historico_palavras = set()
 historico_frases = set()
+
+@bot.command()
+async def img(ctx, *, prompt: str):
+    if not GOOGLE_AI_API_KEY:
+        return await ctx.send("❌ A API de imagem não está configurada (sem chave).")
+    if not autorizado(ctx):
+        return await ctx.send("❌ Comando não autorizado.")
+
+    input_pil_image = None
+    input_filename = "input_image"
+
+    # 1. Verificar e processar anexo de imagem
+    if ctx.message.attachments:
+        attachment = ctx.message.attachments[0]
+        # Verifica se é um tipo de imagem comum
+        if attachment.content_type and attachment.content_type in ['image/png', 'image/jpeg', 'image/jpg', 'image/webp']:
+            await ctx.send(f"⏳ Processando imagem anexada '{attachment.filename}'...")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(attachment.url) as resp:
+                        if resp.status == 200:
+                            image_bytes = await resp.read()
+                            # Abre a imagem com Pillow para passar para a API
+                            input_pil_image = Image.open(io.BytesIO(image_bytes))
+                            input_filename = attachment.filename
+                            print(f"DEBUG: Imagem '{input_filename}' baixada e carregada ({len(image_bytes)} bytes).")
+                        else:
+                            await ctx.send(f"❌ Falha ao baixar a imagem anexada (status: {resp.status}).")
+                            return
+            except Exception as e:
+                await ctx.send(f"❌ Erro ao baixar ou processar anexo: {e}")
+                print(f"Erro detalhado ao processar anexo: {e}")
+                return
+        else:
+            await ctx.send(f"⚠️ O anexo '{attachment.filename}' não é um tipo de imagem suportado (png, jpg, webp). Ignorando anexo.")
+            # Continua sem input_pil_image
+
+    # Mensagem de feedback para o usuário
+    if input_pil_image:
+        await ctx.send(f"⏳ Editando imagem '{input_filename}' com o prompt: '{prompt}'...")
+    else:
+        await ctx.send(f"⏳ Gerando imagem nova com o prompt: '{prompt}'...")
+
+    # 2. Preparar 'contents' e chamar a API Gemini
+    try:
+        # Prepara o conteúdo para a API
+        if input_pil_image:
+            contents_for_api = [prompt, input_pil_image] # Texto e Imagem PIL
+        else:
+            contents_for_api = [prompt] # Apenas Texto
+
+        # Configuração obrigatória para este modelo
+        generation_config = genai_types.GenerateContentConfig(
+            response_modalities=['TEXT', 'IMAGE']
+        )
+
+        # Cria o cliente e chama a API
+        # Nota: A documentação usa genai.Client(), mas a biblioteca geralmente usa as funções
+        # globais após genai.configure(). Se genai.Client() for necessário, ajuste.
+        gemini_model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash-exp-image-generation"
+            # Não precisa passar config aqui, vai na chamada generate_content
+        )
+
+        print(f"DEBUG: Chamando Gemini com contents: {type(contents_for_api)}")
+        response = await gemini_model.generate_content_async( # Usar versão async
+            contents=contents_for_api,
+            generation_config=generation_config,
+            # stream=False # Garante que esperamos a resposta completa
+        )
+        print("DEBUG: Resposta recebida da API Gemini.")
+
+        # 3. Processar a Resposta
+        response_text_parts = []
+        generated_image_bytes = None
+
+        # Itera sobre as partes da resposta
+        # A estrutura pode variar um pouco, adicione prints se não funcionar
+        if response.candidates:
+             # Precisa verificar se 'content' e 'parts' existem
+             if hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        response_text_parts.append(part.text)
+                    elif hasattr(part, 'inline_data') and part.inline_data and generated_image_bytes is None:
+                        # Pega apenas a primeira imagem encontrada
+                        if hasattr(part.inline_data, 'data'):
+                             generated_image_bytes = part.inline_data.data
+                             print(f"DEBUG: Imagem inline_data encontrada ({len(generated_image_bytes)} bytes). MimeType: {part.inline_data.mime_type}")
+                        else:
+                             print("WARN: part.inline_data encontrado, mas sem atributo 'data'.")
+                    # Adicione prints aqui se a estrutura da resposta for diferente
+                    # print(f"DEBUG: Processando part: {part}")
+
+             else:
+                 print("WARN: Estrutura da resposta inesperada (sem content ou parts). Resposta:", response.candidates[0])
+
+        else:
+            print("WARN: Nenhuma 'candidate' na resposta da API.")
+            # Tentar obter o texto de erro, se houver
+            if hasattr(response, 'prompt_feedback'):
+                 response_text_parts.append(f"Erro no feedback do prompt: {response.prompt_feedback}")
+
+
+        # 4. Enviar Resultados para o Discord
+        final_response_text = "\n".join(response_text_parts).strip()
+
+        if generated_image_bytes:
+            print("DEBUG: Enviando imagem gerada para o Discord.")
+            # Cria um discord.File a partir dos bytes
+            img_file = discord.File(io.BytesIO(generated_image_bytes), filename="gemini_image.png") # Gemini provavelmente retorna PNG
+            # Envia o texto (se houver) e a imagem
+            if final_response_text:
+                await ctx.send(f"{final_response_text}", file=img_file)
+            else:
+                await ctx.send(f"🖼️ Imagem para '{prompt}':", file=img_file)
+        elif final_response_text:
+            # Se houve texto mas nenhuma imagem (ou erro)
+            print("DEBUG: Nenhuma imagem gerada/encontrada, enviando apenas texto.")
+            await ctx.send(f"{final_response_text}")
+        else:
+            # Se não houve nem texto nem imagem (erro estranho)
+            print("ERROR: Nenhuma imagem ou texto na resposta final.")
+            await ctx.send("❌ A API não retornou texto ou imagem válidos.")
+
+    except Exception as e:
+        print(f"❌ Erro durante a chamada/processamento da API Gemini: {e}")
+        import traceback # Para debug detalhado
+        traceback.print_exc() # Para debug detalhado
+        await ctx.send(f"❌ Ocorreu um erro interno ao processar a imagem: {e}")
 
 
 @tasks.loop(minutes=1)
