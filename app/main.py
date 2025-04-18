@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 from groq import Groq
 from serpapi import GoogleSearch
 import google.generativeai as genai
-# Removido 'from google.generativeai import types as genai_types' pois usaremos genai.GenerationConfig
+# <<< CORREÇÃO: Garantir que esta importação esteja ativa >>>
+from google.generativeai import types as genai_types
 import aiohttp # Para baixar imagens
 import io      # Para lidar com bytes de imagem
 from PIL import Image # Pillow é necessário para processar a imagem de entrada/saída
@@ -102,10 +103,8 @@ conversas = defaultdict(lambda: deque(maxlen=10)) # Histórico por canal para !a
 
 # Verificação de autorização (CORRIGIDA)
 def autorizado(ctx):
-    # --- DEBUG LOG ---
     print(f"--- Autorizado Check ---")
     print(f"User ID: {ctx.author.id} vs Allowed: {ALLOWED_USER_ID}")
-
     if isinstance(ctx.channel, discord.DMChannel):
         print(f"Context: DM Channel")
         is_allowed = (ctx.author.id == ALLOWED_USER_ID)
@@ -118,9 +117,8 @@ def autorizado(ctx):
         is_allowed = (ctx.guild.id == ALLOWED_GUILD_ID)
         print(f"Guild Check Result: {is_allowed}")
         print(f"--- Fim Autorizado Check ---")
-        return is_allowed # Retorna o resultado da comparação
+        return is_allowed
     else:
-        # Situação inesperada
         print(f"Context: Unknown (Not DM, Not Guild) - Channel Type: {type(ctx.channel)}")
         print(f"--- Fim Autorizado Check ---")
         return False
@@ -139,23 +137,19 @@ def buscar_na_web(consulta):
             "api_key": SERPAPI_KEY
         })
         resultados = search.get_dict()
-
         respostas = []
         organic_results = resultados.get("organic_results", [])
         print(f"DEBUG (buscar_na_web): {len(organic_results)} resultados orgânicos encontrados.")
-
-        for resultado in organic_results[:3]: # Pega top 3
+        for resultado in organic_results[:3]:
             titulo = resultado.get("title", "Sem título")
             snippet = resultado.get("snippet", "Sem descrição")
             link = resultado.get("link", "")
             respostas.append(f"**{titulo}**: {snippet}" + (f" ([link]({link}))" if link else ""))
-
         return "\n\n".join(respostas) if respostas else "Nenhum resultado relevante encontrado."
     except Exception as e:
         print(f"❌ Erro ao buscar na web: {e}")
-        traceback.print_exc() # Log completo do erro
+        traceback.print_exc()
         return f"Erro interno ao buscar na web."
-
 
 # --- Bot Events ---
 @bot.event
@@ -165,23 +159,20 @@ async def on_ready():
     print(f"Py-cord versão: {discord.__version__}")
     print(f"Servidores conectados: {len(bot.guilds)}")
     print(f"--------------------")
-    # Inicia a task de conteúdo diário SE o canal estiver configurado
     if CANAL_DESTINO_ID != 0:
         print(f"Iniciando task 'enviar_conteudo_diario' para o canal {CANAL_DESTINO_ID}")
         enviar_conteudo_diario.start()
     else:
         print("WARN: CANAL_DESTINO_ID não definido ou inválido. Task 'enviar_conteudo_diario' não iniciada.")
 
-
 # --- Bot Commands ---
 
 @bot.command()
 async def ask(ctx, *, pergunta):
-    if not groq_client: # Verifica se o cliente foi inicializado
+    if not groq_client:
         return await ctx.send("❌ O serviço de chat não está disponível (sem chave API).")
     if not autorizado(ctx):
         return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado ou DM permitida.")
-
     canal_id = ctx.channel.id
     print(f"\n--- !ask DEBUG ---")
     print(f"Comando recebido de: {ctx.author} ({ctx.author.id}) em Canal ID: {canal_id}")
@@ -194,9 +185,7 @@ async def ask(ctx, *, pergunta):
     try:
         async with ctx.typing():
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=mensagens,
-                temperature=0.7
+                model="llama3-8b-8192", messages=mensagens, temperature=0.7
             )
             resposta = response.choices[0].message.content
         print(f"Resposta recebida da Groq (primeiros 100 chars): '{resposta[:100]}...'")
@@ -224,24 +213,19 @@ async def search(ctx, *, consulta):
         return await ctx.send("❌ O serviço de busca web não está disponível (sem chave API SerpApi).")
     if not autorizado(ctx):
         return await ctx.send("❌ Este bot só pode ser usado em um servidor autorizado ou DM permitida.")
-
     await ctx.send(f"🔎 Buscando na web sobre: \"{consulta}\"...")
     dados_busca = buscar_na_web(consulta)
     if "Erro:" in dados_busca:
-        await ctx.send(dados_busca)
-        return
+        await ctx.send(dados_busca); return
     if "Nenhum resultado" in dados_busca:
-        await ctx.send(dados_busca)
-        return
+        await ctx.send(dados_busca); return
     await ctx.send("🧠 Analisando resultados com a IA...")
     prompt_contexto = f"""
     Você recebeu a seguinte consulta de um usuário: "{consulta}"
-
     Aqui estão os principais resultados de uma busca na web sobre isso:
     --- RESULTADOS DA BUSCA ---
     {dados_busca}
     --- FIM DOS RESULTADOS ---
-
     Com base **apenas** nas informações dos resultados da busca fornecidos acima, responda à consulta original do usuário de forma clara, concisa e objetiva em português brasileiro. Cite os pontos principais encontrados. Não adicione informações externas aos resultados. Se os resultados não responderem diretamente, diga isso.
     """
     mensagens_busca = [
@@ -252,9 +236,7 @@ async def search(ctx, *, consulta):
     try:
         async with ctx.typing():
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=mensagens_busca,
-                temperature=0.3
+                model="llama3-8b-8192", messages=mensagens_busca, temperature=0.3
             )
             resposta = response.choices[0].message.content
         print("DEBUG (!search): Resposta da IA recebida.")
@@ -324,8 +306,19 @@ async def img(ctx, *, prompt: str):
     try:
         contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
 
-        # <<< CORREÇÃO: REMOVIDO o bloco que criava 'generation_config' >>>
-        # A linha 'generation_config = genai.GenerationConfig(...)' foi removida.
+        # <<< CORREÇÃO: Usar genai_types.GenerateContentConfig >>>
+        # Cria o objeto de configuração usando o tipo específico da documentação
+        try:
+            generation_config_obj = genai_types.GenerateContentConfig(
+                response_modalities=['TEXT', 'IMAGE']
+            )
+            print("DEBUG (!img): Usando genai_types.GenerateContentConfig")
+        except Exception as e_config:
+            print(f"ERRO CRÍTICO (!img): Falha ao criar genai_types.GenerateContentConfig: {e_config}")
+            traceback.print_exc()
+            await ctx.send("❌ Erro interno na configuração da API de imagem (tipo config).")
+            return
+        # <<< FIM DA CRIAÇÃO DA CONFIG >>>
 
         gemini_model = genai.GenerativeModel(
             model_name="gemini-2.0-flash-exp-image-generation"
@@ -334,17 +327,17 @@ async def img(ctx, *, prompt: str):
         print(f"DEBUG (!img): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}")
 
         async with ctx.typing():
-            # Chama a API SEM o parâmetro generation_config
+            # <<< CORREÇÃO: Passar o objeto generation_config_obj criado >>>
             response = await gemini_model.generate_content_async(
-                contents=contents_for_api
-                # Sem 'generation_config=...' aqui
+                contents=contents_for_api,
+                generation_config=generation_config_obj # Passa o objeto criado
             )
+            # <<< FIM DA CORREÇÃO NA CHAMADA >>>
         print("DEBUG (!img): Resposta recebida da API Gemini.")
 
-        # 3. Processar a Resposta
+        # 3. Processar a Resposta (código existente)
         response_text_parts = []
         generated_image_bytes = None
-
         if response.candidates:
              if hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
                 for part in response.candidates[0].content.parts:
@@ -376,9 +369,8 @@ async def img(ctx, *, prompt: str):
             print(f"WARN (!img): Nenhuma 'candidate' na resposta. Prompt Feedback: {feedback}")
             response_text_parts.append(f"⚠️ A API não retornou um candidato válido. {feedback}")
 
-        # 4. Enviar Resultados para o Discord
+        # 4. Enviar Resultados para o Discord (código existente)
         final_response_text = "\n".join(response_text_parts).strip()
-
         if generated_image_bytes:
             print("DEBUG (!img): Enviando imagem gerada para o Discord.")
             img_file = discord.File(io.BytesIO(generated_image_bytes), filename="gemini_image.png")
@@ -399,177 +391,104 @@ async def img(ctx, *, prompt: str):
 
     except Exception as e:
         print(f"❌ Erro durante a chamada/processamento da API Gemini (!img): {e}")
-        traceback.print_exc()
-        await ctx.send(f"❌ Ocorreu um erro interno ao processar o comando !img.")
+        traceback.print_exc() # IMPORTANTE: Verifique este erro nos logs do Render!
+        await ctx.send(f"❌ Ocorreu um erro interno ao processar o comando !img.") # Mensagem genérica
 
 
 # --- Task de Conteúdo Diário ---
 
-@tasks.loop(minutes=1) # Verifica a cada minuto
+@tasks.loop(minutes=1)
 async def enviar_conteudo_diario():
     agora = datetime.datetime.now()
     if agora.hour == 9 and agora.minute == 0: # Ajuste para seu fuso horário se necessário
         print(f"INFO: Horário de enviar conteúdo diário ({agora}).")
-        if CANAL_DESTINO_ID == 0:
-            print("WARN: Canal de destino não configurado para conteúdo diário.")
-            return
+        if CANAL_DESTINO_ID == 0: print("WARN: Canal de destino não configurado."); return
         canal = bot.get_channel(CANAL_DESTINO_ID)
         if canal:
             print(f"INFO: Gerando conteúdo para o canal {canal.name} ({CANAL_DESTINO_ID})...")
             try:
                 conteudo = await gerar_conteudo_com_ia()
-                print(f"INFO: Conteúdo gerado. Enviando para o canal...")
-                if len(conteudo) > 2000:
-                    await canal.send(conteudo[:1990] + "\n[...]")
-                else:
-                    await canal.send(conteudo)
-                print(f"INFO: Conteúdo enviado com sucesso.")
-                await asyncio.sleep(61) # Garante que não rode duas vezes no mesmo minuto
-            except Exception as e:
-                print(f"❌ Erro ao gerar ou enviar conteúdo diário: {e}")
-                traceback.print_exc()
-        else:
-            print(f"ERRO: Não foi possível encontrar o canal com ID {CANAL_DESTINO_ID}.")
+                print(f"INFO: Conteúdo gerado. Enviando...")
+                if len(conteudo) > 2000: await canal.send(conteudo[:1990] + "\n[...]")
+                else: await canal.send(conteudo)
+                print(f"INFO: Conteúdo enviado.")
+                await asyncio.sleep(61)
+            except Exception as e: print(f"❌ Erro ao gerar/enviar conteúdo diário: {e}"); traceback.print_exc()
+        else: print(f"ERRO: Canal {CANAL_DESTINO_ID} não encontrado.")
 
 @enviar_conteudo_diario.before_loop
 async def before_enviar_conteudo_diario():
-    print("INFO: Aguardando o bot ficar pronto antes de iniciar o loop de conteúdo diário...")
+    print("INFO: Aguardando bot ficar pronto para loop diário...")
     await bot.wait_until_ready()
-    print("INFO: Bot pronto. Iniciando loop de conteúdo diário.")
-
+    print("INFO: Bot pronto. Iniciando loop diário.")
 
 async def gerar_conteudo_com_ia():
-    if not groq_client:
-        return "❌ Serviço de geração de conteúdo indisponível (sem chave API Groq)."
+    if not groq_client: return "❌ Serviço de geração indisponível (sem chave Groq)."
     local_filename = HISTORICO_FILE_PATH.split('/')[-1]
     local_full_path = os.path.abspath(local_filename)
-    print(f"DEBUG (gerar_conteudo): Tentando ler histórico local de '{local_full_path}'")
+    print(f"DEBUG (gerar_conteudo): Lendo histórico de '{local_full_path}'")
     try:
         with open(local_filename, "r", encoding="utf-8") as f:
-            historico = json.load(f)
-            if not isinstance(historico, dict): raise ValueError("Arquivo não é um dicionário JSON")
-            if "palavras" not in historico: historico["palavras"] = []
-            if "frases" not in historico: historico["frases"] = []
-            if not isinstance(historico["palavras"], list): historico["palavras"] = []
-            if not isinstance(historico["frases"], list): historico["frases"] = []
-            print(f"DEBUG (gerar_conteudo): Histórico lido com {len(historico['palavras'])} palavras e {len(historico['frases'])} frases.")
-    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
-        print(f"WARN (gerar_conteudo): Arquivo historico.json não encontrado ou inválido ({e}). Começando do zero.")
+            historico = json.load(f); assert isinstance(historico, dict)
+            historico.setdefault("palavras", []); historico.setdefault("frases", [])
+            assert isinstance(historico["palavras"], list); assert isinstance(historico["frases"], list)
+            print(f"DEBUG: Histórico lido: {len(historico['palavras'])} palavras, {len(historico['frases'])} frases.")
+    except Exception as e:
+        print(f"WARN (gerar_conteudo): Histórico não encontrado/inválido ({e}). Começando do zero.")
         historico = {"palavras": [], "frases": []}
-    N_ITENS_RECENTES = 5
-    palavras_recentes = historico["palavras"][-N_ITENS_RECENTES:]
-    frases_recentes = historico["frases"][-N_ITENS_RECENTES:]
-    palavras_evitar_str = ", ".join(f"'{p}'" for p in palavras_recentes) if palavras_recentes else "Nenhuma"
-    frases_evitar_str = " | ".join(f"'{f}'" for f in frases_recentes) if frases_recentes else "Nenhuma"
+    N=5; palavras_recentes=historico["palavras"][-N:]; frases_recentes=historico["frases"][-N:]
+    palavras_evitar = ", ".join(f"'{p}'" for p in palavras_recentes) or "Nenhuma"
+    frases_evitar = " | ".join(f"'{f}'" for f in frases_recentes) or "Nenhuma"
 
     for tentativa in range(15):
         print(f"--- Geração Tentativa {tentativa + 1}/15 ---")
-        prompt = f"""
-Crie duas coisas originais e variadas para um canal de aprendizado:
-
-1. Uma palavra em inglês útil com:
-- Significado claro em português.
-- Um exemplo de frase em inglês (com tradução para português).
-
-2. Uma frase estoica inspiradora com:
-- Autor (se souber, senão "Desconhecido" ou "Tradição Estoica").
-- Pequena explicação/reflexão em português (1-2 frases concisas).
-
-**REGRAS IMPORTANTES:**
-- **Seja criativo e evite repetições.** O objetivo é apresentar conteúdo NOVO.
-- **NÃO use as seguintes palavras recentes:** {palavras_evitar_str}
-- **NÃO use as seguintes frases estoicas recentes:** {frases_evitar_str}
-- Siga o formato EXATO abaixo, incluindo as quebras de linha.
-
-Formato:
-Palavra: [Palavra em inglês aqui]
-Significado: [Significado em português aqui]
-Exemplo: [Frase exemplo em inglês aqui]
-Tradução: [Tradução da frase exemplo aqui]
-
-Frase estoica: "[Frase estoica aqui]"
-Autor: [Autor aqui]
-Reflexão: [Reflexão aqui]
-"""
+        prompt = f"""Crie uma palavra em inglês útil (com significado, exemplo, tradução) E uma frase estoica inspiradora (com autor, reflexão). **REGRAS:** Seja criativo, evite repetições. NÃO use palavras recentes: {palavras_evitar}. NÃO use frases recentes: {frases_evitar}. Siga o formato EXATO:\n\nPalavra: [Palavra]\nSignificado: [Significado]\nExemplo: [Exemplo]\nTradução: [Tradução]\n\nFrase estoica: "[Frase]"\nAutor: [Autor]\nReflexão: [Reflexão]"""
         try:
-            response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[
-                    {"role": "system", "content": "Você é um professor de inglês e filosofia estoica, criativo e focado em gerar conteúdo variado e original para um canal no Discord, seguindo estritamente o formato pedido."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.85
-            )
+            response = groq_client.chat.completions.create(model="llama3-8b-8192", messages=[{"role": "system", "content": "Você é um professor de inglês/filosofia estoica focado em originalidade e formato."}, {"role": "user", "content": prompt}], temperature=0.85)
             conteudo = response.choices[0].message.content
             match_palavra = re.search(r"(?im)^Palavra:\s*\**(.+?)\**\s*$", conteudo)
             match_frase = re.search(r"(?im)^Frase estoica:\s*\"?(.+)\"?\s*$", conteudo)
-
             if match_palavra and match_frase:
-                palavra = match_palavra.group(1).strip()
-                frase = match_frase.group(1).strip()
-                print(f"DEBUG (gerar_conteudo): Extraído - Palavra='{palavra}', Frase='{frase}'")
-                palavra_lower = palavra.lower()
-                frase_lower = frase.lower()
-                historico_palavras_lower = [p.lower() for p in historico["palavras"]]
-                historico_frases_lower = [f.lower() for f in historico["frases"]]
-
-                if palavra_lower not in historico_palavras_lower and frase_lower not in historico_frases_lower:
-                    print("INFO (gerar_conteudo): Conteúdo inédito encontrado!")
-                    historico["palavras"].append(palavra)
-                    historico["frases"].append(frase)
+                palavra = match_palavra.group(1).strip(); frase = match_frase.group(1).strip()
+                print(f"DEBUG: Extraído - P='{palavra}', F='{frase}'")
+                palavra_lower=palavra.lower(); frase_lower=frase.lower()
+                hist_palavras_lower=[p.lower() for p in historico["palavras"]]; hist_frases_lower=[f.lower() for f in historico["frases"]]
+                if palavra_lower not in hist_palavras_lower and frase_lower not in hist_frases_lower:
+                    print("INFO: Conteúdo inédito!"); historico["palavras"].append(palavra); historico["frases"].append(frase)
                     try:
-                        with open(local_filename, "w", encoding="utf-8") as f:
-                            print(f"DEBUG (gerar_conteudo): Salvando histórico atualizado em '{local_full_path}'")
-                            json.dump(historico, f, indent=2, ensure_ascii=False)
-                            print(f"✅ Histórico salvo localmente com sucesso.")
-                    except Exception as save_err:
-                        print(f"❌ Erro ao salvar o arquivo local '{local_filename}': {save_err}")
+                        with open(local_filename,"w",encoding="utf-8") as f: json.dump(historico,f,indent=2,ensure_ascii=False)
+                        print(f"✅ Histórico salvo localmente.")
+                    except Exception as e: print(f"❌ Erro ao salvar local: {e}")
                     try:
-                        print(f"INFO (gerar_conteudo): Tentando enviar '{HISTORICO_FILE_PATH}' para o GitHub...")
-                        status, resp_json = await asyncio.to_thread(upload_to_github)
-                        if status not in [200, 201]:
-                             print(f"WARN (gerar_conteudo): Upload para GitHub falhou ou retornou status {status}.")
-                        else:
-                             print(f"INFO (gerar_conteudo): Upload para GitHub parece ter funcionado (status {status}).")
-                    except Exception as upload_err:
-                        print(f"❌ Exceção durante a chamada de upload_to_github: {upload_err}")
-                        traceback.print_exc()
+                        print(f"INFO: Enviando '{HISTORICO_FILE_PATH}' para GitHub...")
+                        status, resp = await asyncio.to_thread(upload_to_github)
+                        print(f"INFO: Upload GitHub status: {status}")
+                    except Exception as e: print(f"❌ Exceção no upload: {e}"); traceback.print_exc()
                     return conteudo
-                else:
-                    print(f"⚠️ Conteúdo repetido detectado (Palavra: '{palavra}', Frase: '{frase}'). Tentando novamente...")
-            else:
-                 print(f"⚠️ Regex falhou! Palavra Match: {match_palavra}, Frase Match: {match_frase}")
-        except Exception as e:
-            print(f"❌ Erro durante a chamada da API Groq ou processamento na tentativa {tentativa+1}: {e}")
-            traceback.print_exc()
+                else: print(f"⚠️ Conteúdo repetido detectado. Tentando novamente...")
+            else: print(f"⚠️ Regex falhou! P:{match_palavra}, F:{match_frase}")
+        except Exception as e: print(f"❌ Erro API Groq/proc. tentativa {tentativa+1}: {e}"); traceback.print_exc()
         await asyncio.sleep(3)
-    print("⚠️ Não foi possível gerar um conteúdo inédito após 15 tentativas.")
-    return "⚠️ Desculpe, não consegui gerar um conteúdo novo hoje após várias tentativas."
+    print("⚠️ Não foi possível gerar conteúdo inédito após 15 tentativas.")
+    return "⚠️ Desculpe, não consegui gerar conteúdo novo hoje."
 
 # ------ Servidor Flask (Keep-alive para Render) ------
 app = Flask(__name__)
 @app.route("/")
-def home():
-    return f"Bot {bot.user.name if bot.user else ''} está online!"
+def home(): return f"Bot {bot.user.name if bot.user else ''} está online!"
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     print(f"INFO: Iniciando servidor Flask na porta {port}")
-    # CORREÇÃO: Removido 'log_output=False'
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
+    try: app.run(host="0.0.0.0", port=port, use_reloader=False)
+    except Exception as e: print(f"ERRO CRÍTICO no Flask: {e}"); traceback.print_exc()
 
 # ------ Início da aplicação ------
 if __name__ == "__main__":
-    if not DISCORD_TOKEN:
-        print("ERRO CRÍTICO: DISCORD_TOKEN não encontrado no ambiente. O bot não pode iniciar.")
+    if not DISCORD_TOKEN: print("ERRO CRÍTICO: DISCORD_TOKEN não encontrado.")
     else:
-        print("INFO: Iniciando thread do servidor Flask...")
-        server_thread = Thread(target=run_server, daemon=True)
-        server_thread.start()
-        print("INFO: Iniciando o bot Discord...")
-        try:
-            bot.run(DISCORD_TOKEN)
-        except discord.LoginFailure:
-            print("ERRO CRÍTICO: Falha no login do Discord. Verifique o DISCORD_TOKEN.")
-        except Exception as e:
-            print(f"ERRO CRÍTICO: Erro inesperado ao rodar o bot: {e}")
-            traceback.print_exc()
+        print("INFO: Iniciando thread Flask...")
+        server_thread = Thread(target=run_server, daemon=True); server_thread.start()
+        print("INFO: Iniciando bot Discord...")
+        try: bot.run(DISCORD_TOKEN)
+        except discord.LoginFailure: print("ERRO CRÍTICO: Falha login Discord. Verifique DISCORD_TOKEN.")
+        except Exception as e: print(f"ERRO CRÍTICO ao rodar bot: {e}"); traceback.print_exc()
