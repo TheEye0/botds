@@ -358,8 +358,8 @@ async def img(ctx, *, prompt: str):
                 feedback = "N/A"
                 if response and hasattr(response, 'prompt_feedback'):
                      # ... (código para obter feedback) ...
-                print(f"WARN (!img - Ctx ID: {ctx.message.id}): Nenhuma 'candidate'. Feedback: {feedback}")
-                response_text_parts.append(f"⚠️ API não retornou candidato. {feedback}")
+                   print(f"WARN (!img - Ctx ID: {ctx.message.id}): Nenhuma 'candidate'. Feedback: {feedback}")
+                   response_text_parts.append(f"⚠️ API não retornou candidato. {feedback}")
 
         except Exception as proc_err:
              print(f"ERROR (!img - Ctx ID: {ctx.message.id}): Erro ao PROCESSAR resposta da API.")
