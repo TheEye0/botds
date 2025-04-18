@@ -16,6 +16,7 @@ import asyncio
 from discord.ext import tasks
 import json
 import re
+from github_uploader import upload_to_github
 
 conversas = defaultdict(lambda: deque(maxlen=10))
 
@@ -226,11 +227,22 @@ Reflexão: ...
 
                     with open("historico.json", "w", encoding="utf-8") as f:
                         json.dump(historico, f, indent=2, ensure_ascii=False)
+                        print("✅ Histórico salvo em:", os.path.abspath("historico.json"))
+                        
+# Envia o arquivo atualizado pro GitHub
+status, resp = upload_to_github()
+if status == 201 or status == 200:
+    print("✅ Histórico atualizado no GitHub.")
+else:
+    print("⚠️ Erro ao enviar para o GitHub:", resp)
 
                     return conteudo
             else:
                 print("⚠️ Não foi possível extrair a palavra ou frase do conteúdo gerado:")
                 print(conteudo)
+                print("⚠️ Conteúdo repetido detectado.")
+                print("Palavra:", palavra)
+                print("Frase:", frase)
 
         except Exception as e:
             return f"❌ Erro ao gerar conteúdo diário: {e}"
