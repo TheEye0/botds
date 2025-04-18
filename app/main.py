@@ -310,7 +310,7 @@ async def img(ctx, *, prompt: str):
     try:
         contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
 
-       gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
+        gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
 
         print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Chamando Gemini SEM config explícita. Contents: {[type(c).__name__ for c in contents_for_api]}")
 
