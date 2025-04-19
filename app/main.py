@@ -302,13 +302,13 @@ async def img(ctx, *, prompt: str):
 
     try:
     # 1. Prepara os contents (texto e opcional imagem de entrada)
-    contents = []
-    contents.append({"parts": [{"text": prompt}]})
-    if ctx.message.attachments:
-        attachment = ctx.message.attachments[0]
-        img_bytes = await attachment.read()
-        b64 = base64.b64encode(img_bytes).decode()
-        contents.append({"parts": [{"inlineData": {"data": b64}}]})
+        contents = []
+        contents.append({"parts": [{"text": prompt}]})
+        if ctx.message.attachments:
+            attachment = ctx.message.attachments[0]
+            img_bytes = await attachment.read()
+            b64 = base64.b64encode(img_bytes).decode()
+            contents.append({"parts": [{"inlineData": {"data": b64}}]})
 
     # 2. Chama a Gemini API para gerar texto+imagem em modo nativo
     try:
