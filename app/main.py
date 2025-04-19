@@ -301,38 +301,41 @@ async def img(ctx, *, prompt: str):
     await ctx.send("⏳ Gerando imagem…")
 
     try:
-        # 1. Prepara os contents (texto e opcional imagem de entrada)
-        contents = []
-        # Sempre envia o prompt como primeiro content
-        contents.append({"parts": [{"text": prompt}]})
-        # Se houver imagem anexada, converte para base64 e adiciona
-        if ctx.message.attachments:
-            attachment = ctx.message.attachments[0]
-            img_bytes = await attachment.read()
-            b64 = base64.b64encode(img_bytes).decode()
-            contents.append({"parts": [{"inlineData": {"data": b64}}]})
+    # 1. Prepara os contents (texto e opcional imagem de entrada)
+    contents = []
+    contents.append({"parts": [{"text": prompt}]})
+    if ctx.message.attachments:
+        attachment = ctx.message.attachments[0]
+        img_bytes = await attachment.read()
+        b64 = base64.b64encode(img_bytes).decode()
+        contents.append({"parts": [{"inlineData": {"data": b64}}]})
 
-        # 2. Chama a Gemini API para gerar texto+imagem em modo nativo
+    # 2. Chama a Gemini API para gerar texto+imagem em modo nativo
     try:
         contents_for_api = [prompt, input_pil_image] if input_pil_image else [prompt]
         gemini_model = genai.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
         print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Chamando Gemini com contents: {[type(c).__name__ for c in contents_for_api]}")
-        generation_config_obj = genai.GenerationConfig(
-        response_modalities=["TEXT", "IMAGE"]
-            )
-        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Tentando usar config: {generation_config_obj}")
-                                                                            
 
+        generation_config_obj = genai.GenerationConfig(
+            response_modalities=["TEXT", "IMAGE"]
+        )
+        print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): Tentando usar config: {generation_config_obj}")
 
         response = None
         async with ctx.typing():
-             # Passa o objeto config criado
-             response = await gemini_model.generate_content_async(
-                 contents=contents_for_api,
-                 generation_config=generation_config_obj
-             )
+            response = await gemini_model.generate_content_async(
+                contents=contents_for_api,
+                generation_config=generation_config_obj
+            )
 
         print(f"DEBUG (!img - Ctx ID: {ctx.message.id}): RESPOSTA recebida da API Gemini.")
+
+    except Exception as e:
+        print(f"Erro interno ao chamar a API Gemini: {e}")
+
+except Exception as e:
+    print(f"Erro ao preparar os contents: {e}")
+
 
         # 3. Itera pelas partes e separa texto x imagem
         final_text = []
