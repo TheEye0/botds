@@ -91,11 +91,76 @@ def salvar_historico(hist):
         with open(HISTORICO_FILE_PATH, 'w', encoding='utf-8') as f:
             json.dump(hist, f, ensure_ascii=False, indent=2)
         # dispara upload para GitHub
-        import asyncio; asyncio.create_task(upload_to_github())
+        try:
+            upload_to_github()
+        except Exception:
+            traceback.print_exc()
     except Exception:
         traceback.print_exc()
 
 # Geração de conteúdo via Groq com histórico
+async def gerar_conteudo_com_ia() -> str:
+    if not groq_client:
+        return "⚠️ Serviço de geração indisponível (sem chave Groq)."
+    # Carrega histórico existente
+    hist = carregar_historico()
+    # Monta prompt solicitando JSON estruturado
+    prompt = (
+        "Por favor, responda apenas um objeto JSON com as chaves:
+"
+        "  - palavra: Palavra em inglês.
+"
+        "  - definicao: Definição da palavra em português.
+"
+        "  - exemplo: Exemplo de frase em inglês usando a palavra.
+"
+        "  - exemplo_traducao: Tradução da frase de exemplo para o português.
+"
+        "  - frase_estoica: Uma frase estoica.
+"
+        "  - explicacao_frase: Explicação da frase estoica em português.
+"
+        f"Evite repetir palavras ou frases já usadas: palavras anteriores {hist['palavras'][-5:]}, frases anteriores {hist['frases'][-5:]}."
+    )
+    try:
+        resp = groq_client.chat.completions.create(
+            model=LLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": "Você formata saídas em JSON conforme solicitado."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        content = resp.choices[0].message.content
+        # Tenta parsear JSON
+        data = json.loads(content)
+    except Exception:
+        traceback.print_exc()
+        return f"Resposta inesperada ou falha no JSON: {content}"
+    # Atualiza histórico
+    palavra = data.get('palavra')
+    frase_est = data.get('frase_estoica')
+    if palavra:
+        hist['palavras'].append(palavra)
+    if frase_est:
+        hist['frases'].append(frase_est)
+    salvar_historico(hist)
+    # Monta resposta formatada
+    return (
+        f"**Palavra:** {data.get('palavra')}
+"
+        f"**Definição:** {data.get('definicao')}
+"
+        f"**Exemplo:** {data.get('exemplo')}
+"
+        f"**Tradução do exemplo:** {data.get('exemplo_traducao')}
+"
+        f"**Frase estoica:** {data.get('frase_estoica')}
+"
+        f"**Explicação:** {data.get('explicacao_frase')}"
+    )
+
+# Tarefa de conteúdo diário com histórico
 async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível (sem chave Groq)."
