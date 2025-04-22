@@ -216,9 +216,9 @@ def home():
     return f"Bot {bot.user.name if bot.user else ''} online!"
 
 # Keep-alive server
- def run_server():
-     port = int(os.getenv('PORT',10000))
-     app.run(host='0.0.0.0',port=port)
+def run_server():
+    port = int(os.getenv('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
 
 # Inicia bot
 if __name__ == '__main__':
