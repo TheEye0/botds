@@ -98,23 +98,45 @@ async def gerar_conteudo_com_ia() -> str:
         return "⚠️ Serviço de geração indisponível."
     hist = carregar_historico()
     # Prompt para criar palavra e frase estoica com explicação
-    prompt = (
-        "Crie uma palavra em inglês com definição, exemplo e tradução. "
-        "Em seguida, forneça uma frase estoica com explicação dessa frase. "
-        "Use o formato abaixo, em português e inglês conforme indicado:
-"
-        "Palavra: <palavra>
-"
-        "Definição: <definição em português>
-"
-        "Exemplo: <exemplo em inglês>
-"
-        "Tradução do exemplo: <tradução>
-"
-        "Frase estoica: <frase em inglês>
-"
-        "Explicação: <explicação em português>"
-    )
+    prompt = """
+Crie uma palavra em inglês com definição, exemplo em inglês e tradução para o português.
+Em seguida, forneça uma frase estoica em inglês com sua explicação em português.
+Use exatamente este formato, cada item em nova linha:
+Palavra: <palavra>
+Definição: <definição em português>
+Exemplo: <exemplo em inglês>
+Tradução do exemplo: <tradução>
+Frase estoica: <frase em inglês>
+Explicação: <explicação em português>
+"""
+    try:
+        resp = groq_client.chat.completions.create(
+            model=LLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": "Você é um professor de inglês e filosofia estoica."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        content = resp.choices[0].message.content.strip()
+    except Exception:
+        traceback.print_exc()
+        return f"Erro ao gerar conteúdo: {resp if 'resp' in locals() else ''}"
+    # Extrai palavra e frase estoica para histórico
+    lines = content.splitlines()
+    palavra = None
+    frase = None
+    for line in lines:
+        if line.startswith("Palavra:"):
+            palavra = line.split("Palavra:",1)[1].strip()
+        if line.startswith("Frase estoica:"):
+            frase = line.split("Frase estoica:",1)[1].strip()
+    if palavra:
+        hist['palavras'].append(palavra)
+    if frase:
+        hist['frases'].append(frase)
+    salvar_historico(hist)
+    return content
     try:
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
