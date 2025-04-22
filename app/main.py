@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-main.py - BotDS Discord Bot com integração Groq e Google Gemini
+main.py - BotDS Discord Bot com integração Groq e Google Generative AI
 
-Correções e integração final:
+Correções e versão final:
+- Import correto de google.generativeai (genai)
+- Configuração de ai_client com genai.Client
 - Comando !testar_conteudo restaurado
-- !img migrado para Google GenAI SDK (gemini-2.0-flash-exp-image-generation)
-- Parametrização de modelo Llama via variável de ambiente LLAMA_MODEL
-- Fluxos de exceção com return antecipado para evitar duplicação de mensagens
+- Comando !img usando genai.Image.create (sem types)
+- Tratamento de exceções com returns antecipados
 - Inclusão completa de comando !search
-- `enviar_conteudo_diario` definido antes de on_ready
-- `run_server` para keep-alive com Flask
+- Definição de enviar_conteudo_diario antes de on_ready
+- run_server para keep-alive com Flask
 """
 import base64
 import discord
@@ -27,8 +28,7 @@ import io
 # APIs
 from groq import Groq, NotFoundError
 from serpapi import GoogleSearch
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -51,10 +51,10 @@ CANAL_DESTINO_ID = _int_env("CANAL_DESTINO_ID")
 
 # Inicialização dos clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+ai_client = None
 if GOOGLE_AI_API_KEY:
-    ai_client = genai.Client(api_key=GOOGLE_AI_API_KEY)
-else:
-    ai_client = None
+    genai.configure(api_key=GOOGLE_AI_API_KEY)
+    ai_client = genai
 
 # Discord bot setup
 intents = discord.Intents.default()
@@ -70,7 +70,7 @@ async def send_long_message(ctx, message: str, limit: int = 2000):
     for i in range(0, len(message), limit):
         await ctx.send(message[i:i+limit])
 
-# Autorização
+# Verifica autorização
 def autorizado(ctx):
     if isinstance(ctx.channel, discord.DMChannel):
         return ctx.author.id == ALLOWED_USER_ID
@@ -78,7 +78,7 @@ def autorizado(ctx):
         return ctx.guild.id == ALLOWED_GUILD_ID
     return False
 
-# Conteúdo via Groq
+# Geração de conteúdo via Groq
 async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível (sem chave Groq)."
@@ -97,7 +97,7 @@ async def gerar_conteudo_com_ia() -> str:
         traceback.print_exc()
         return "⚠️ Falha ao gerar conteúdo."
 
-# Tarefa diária
+# Tarefa de conteúdo diário
 @tasks.loop(minutes=1)
 async def enviar_conteudo_diario():
     now = datetime.datetime.now()
@@ -197,7 +197,7 @@ async def testar_conteudo(ctx):
     conteudo = await gerar_conteudo_com_ia()
     await send_long_message(ctx, conteudo)
 
-# Comando !img usando Google GenAI SDK
+# Comando !img usando Google Generative AI
 @bot.command()
 async def img(ctx, *, prompt: str):
     if not ai_client:
@@ -206,26 +206,21 @@ async def img(ctx, *, prompt: str):
     if not autorizado(ctx):
         await ctx.send("❌ Não autorizado.")
         return
-    contents = [{"text": prompt}]
     try:
-        response = ai_client.models.generate_content(
+        response = genai.Image.create(
+            prompt=prompt,
             model="gemini-2.0-flash-exp-image-generation",
-            contents=contents,
-            config=types.GenerateContentConfig(response_modalities=["TEXT","IMAGE"])
+            size="1024x1024"
         )
-        for part in response.candidates[0].content.parts:
-            if part.text:
-                await ctx.send(part.text)
-            elif part.inline_data and part.inline_data.data:
-                img_bytes = part.inline_data.data
-                data = base64.b64decode(img_bytes)
-                await ctx.send(file=discord.File(io.BytesIO(data), filename="gemini.png"))
-                return
+        url = response["images"][0]["imageUri"]
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as r:
+                data = await r.read()
+                await ctx.send(file=discord.File(io.BytesIO(data), filename="image.png"))
     except Exception:
         traceback.print_exc()
-        await ctx.send("❌ Erro ao gerar imagem com Gemini.")
+        await ctx.send("❌ Erro ao gerar imagem com Google Generative AI.")
         return
-    await ctx.send("❌ Nenhuma imagem gerada.")
 
 # Keep-alive Flask
 app = Flask(__name__)
