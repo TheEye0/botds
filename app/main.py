@@ -76,9 +76,12 @@ def autorizado(ctx):
     return False
 
 # Histórico de conteúdo
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+HIST_FILE = os.path.join(BASE_DIR, HISTORICO_FILE_PATH)
+
 def carregar_historico():
     try:
-        with open(HISTORICO_FILE_PATH, 'r', encoding='utf-8') as f:
+        with open(HIST_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except:
         return {'palavras': [], 'frases': []}
@@ -86,7 +89,7 @@ def carregar_historico():
 
 def salvar_historico(hist):
     try:
-        with open(HISTORICO_FILE_PATH, 'w', encoding='utf-8') as f:
+        with open(HIST_FILE, 'w', encoding='utf-8') as f:
             json.dump(hist, f, ensure_ascii=False, indent=2)
         try:
             upload_to_github()
@@ -102,13 +105,13 @@ async def gerar_conteudo_com_ia() -> str:
     hist = carregar_historico()
     prompt = """
 Crie uma palavra em inglês com definição, exemplo em inglês e tradução para o português.
-Em seguida, forneça uma frase estoica em inglês com sua explicação em português.
+Em seguida, forneça uma frase estoica em português com sua explicação em português.
 Use exatamente este formato, cada item em nova linha:
 Palavra: <palavra>
 Definição: <definição em português>
 Exemplo: <exemplo em inglês>
 Tradução do exemplo: <tradução>
-Frase estoica: <frase em inglês>
+Frase estoica: <frase em português>
 Explicação: <explicação em português>
 """
     try:
