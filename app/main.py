@@ -99,37 +99,51 @@ async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível."
     hist = carregar_historico()
+    # Prompt aprimorado: instruções claras para JSON puro
     prompt = (
-        "Responda apenas com um objeto JSON contendo as chaves: palavra, definicao, exemplo, exemplo_traducao, frase_estoica, explicacao_frase. "
-        f"Evite repetir palavras: {hist['palavras'][-5:]}, frases: {hist['frases'][-5:]}."
+        "Por favor, responda apenas com um objeto JSON válido, sem markdown ou explicações adicionais, contendo as chaves: "
+        "palavra, definicao, exemplo, exemplo_traducao, frase_estoica, explicacao_frase. "
+        f"Evite repetir estas palavras: {hist['palavras'][-5:]}, frases: {hist['frases'][-5:]}."
     )
     try:
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
             messages=[
-                {"role":"system","content":"Formate a saída exatamente como JSON."},
-                {"role":"user","content":prompt}
+                {"role": "system", "content": "Formate a saída exatamente como JSON puro, sem markdown."},
+                {"role": "user", "content": prompt}
             ],
             temperature=0.7
         )
-        content = resp.choices[0].message.content
+        content = resp.choices[0].message.content.strip()
+        # Remove possíveis blocos de código markdown
+        if content.startswith('```'):
+            parts = content.split('```')
+            if len(parts) >= 2:
+                content = parts[1].strip()
         data = json.loads(content)
     except Exception:
         traceback.print_exc()
-        return f"Erro no JSON ou resposta inválida: {content}"
+        return f"Erro ao processar JSON: {content}"
     # Atualiza histórico
     palavra = data.get('palavra')
     frase = data.get('frase_estoica')
-    if palavra: hist['palavras'].append(palavra)
-    if frase: hist['frases'].append(frase)
+    if palavra:
+        hist['palavras'].append(palavra)
+    if frase:
+        hist['frases'].append(frase)
     salvar_historico(hist)
-    # Formata saída
+    # Formata saída para Discord
     return (
-        f"**Palavra:** {data['palavra']}\n"
-        f"**Definição:** {data['definicao']}\n"
-        f"**Exemplo:** {data['exemplo']}\n"
-        f"**Tradução do exemplo:** {data['exemplo_traducao']}\n"
-        f"**Frase estoica:** {data['frase_estoica']}\n"
+        f"**Palavra:** {data['palavra']}
+"
+        f"**Definição:** {data['definicao']}
+"
+        f"**Exemplo:** {data['exemplo']}
+"
+        f"**Tradução do exemplo:** {data['exemplo_traducao']}
+"
+        f"**Frase estoica:** {data['frase_estoica']}
+"
         f"**Explicação:** {data['explicacao_frase']}"
     )
 
