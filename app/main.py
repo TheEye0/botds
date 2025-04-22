@@ -66,9 +66,9 @@ bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
 # Utilitário para mensagens longas
-def send_long_message(ctx, message: str, limit: int = 2000):
+async def send_long_message(ctx, message: str, limit: int = 2000):
     for i in range(0, len(message), limit):
-        await ctx.send(message[i:i+limit])  # corrigido para await
+        await ctx.send(message[i:i+limit])
 
 # Autorização
 def autorizado(ctx):
