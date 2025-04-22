@@ -144,7 +144,7 @@ async def ask(ctx, *, pergunta: str):
     hist.append({"role": "user", "content": pergunta})
     try:
         response = groq_client.chat.completions.create(
-            model="llama-4-maverick-17b-128e-instruct",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=list(hist),
             temperature=0.7
         )
@@ -176,7 +176,7 @@ async def search(ctx, *, consulta: str):
     )
     try:
         response = groq_client.chat.completions.create(
-            model="llama-4-maverick-17b-128e-instruct",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
                 {"role": "system", "content": "Você resume resultados de busca com precisão."},
                 {"role": "user", "content": prompt}
@@ -273,7 +273,7 @@ async def gerar_conteudo_com_ia() -> str:
     )
     try:
         resp = groq_client.chat.completions.create(
-            model="llama-4-maverick-17b-128e-instruct",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
                 {"role": "system", "content": "Professor de inglês/estoico"},
                 {"role": "user", "content": prompt}
