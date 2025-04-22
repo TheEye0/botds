@@ -8,6 +8,8 @@ Correções:
 - Comando !img refatorado para usar Gemini 2.0 Flash Experimental corretamente
 - Inclusão de comando !search completo
 - Definição de enviar_conteudo_diario antes de on_ready
+- Import correto de types para Google Generative AI
+- Definição de run_server para keep-alive
 """
 import base64
 import discord
@@ -24,7 +26,7 @@ from dotenv import load_dotenv
 from groq import Groq, NotFoundError
 from serpapi import GoogleSearch
 import google.generativeai as genai
-from google.genai import types
+from google.generativeai import types
 
 # Utilitários
 import aiohttp
@@ -150,8 +152,8 @@ async def search(ctx, *, consulta: str):
         return await ctx.send("❌ Não autorizado.")
     await ctx.send(f"🔍 Buscando por: {consulta}")
     try:
-        search = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
-        resultados = search.get_dict()
+        search_api = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
+        resultados = search_api.get_dict()
         organic = resultados.get("organic_results", [])[:3]
         if not organic:
             return await ctx.send("Nenhum resultado relevante encontrado.")
@@ -195,9 +197,16 @@ async def img(ctx, *, prompt: str):
         b64 = base64.b64encode(img_bytes).decode()
         contents.append({"parts": [{"inlineData": {"data": b64}}]})
     try:
-        model = google_client.GenerativeModel(model_name="gemini-2.0-flash-exp-image-generation")
-        config = types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"])
-        response = await model.generate_content_async(contents=contents, generation_config=config)
+        model = google_client.GenerativeModel(
+            model_name="gemini-2.0-flash-exp-image-generation"
+        )
+        config = types.GenerateContentConfig(
+            response_modalities=["TEXT", "IMAGE"]
+        )
+        response = await model.generate_content_async(
+            contents=contents,
+            generation_config=config
+        )
     except Exception:
         traceback.print_exc()
         return await ctx.send("❌ Erro ao gerar imagem com Gemini.")
@@ -214,6 +223,13 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return f"Bot {bot.user.name if bot.user else ''} está online!"
+
+# Função de servidor para keep-alive
+```python
+def run_server():
+    port = int(os.getenv('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
+```
 
 # Execução do bot
 if __name__ == '__main__':
