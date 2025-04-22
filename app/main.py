@@ -225,11 +225,9 @@ def home():
     return f"Bot {bot.user.name if bot.user else ''} está online!"
 
 # Função de servidor para keep-alive
-```python
 def run_server():
     port = int(os.getenv('PORT', 10000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
-```
 
 # Execução do bot
 if __name__ == '__main__':
