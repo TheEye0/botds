@@ -1,41 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-main.py - BotDS Discord Bot com integração Groq e Google Generative AI
+main.py - BotDS Discord Bot com integração Groq e automação de conteúdo diário
 
-Correções e versão final:
-- Import correto de google.generativeai (genai)
-- Configuração de ai_client com genai.Client
-- Comando !testar_conteudo restaurado
-- Comando !img usando genai.Image.create (sem types)
-- Tratamento de exceções com returns antecipados
+Correções e ajustes:
+- Remoção total do gerador de imagens (!img)
+- Reintrodução de histórico em historico.json com upload para GitHub
+- Comando !testar_conteudo
+- Fluxos de exceção com return antecipado para evitar duplicação de mensagens
 - Inclusão completa de comando !search
 - Definição de enviar_conteudo_diario antes de on_ready
 - run_server para keep-alive com Flask
 """
+import os
+import json
+import datetime
+import traceback
 import base64
 import discord
 from discord.ext import commands, tasks
-import os
-import datetime
-import traceback
 from collections import defaultdict, deque
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
-import aiohttp
-import io
 
-# APIs
+# API Clients
 from groq import Groq, NotFoundError
 from serpapi import GoogleSearch
-import google.generativeai as genai
+try:
+    from github_uploader import upload_to_github, HISTORICO_FILE_PATH
+except ImportError:
+    HISTORICO_FILE_PATH = 'historico.json'
+    async def upload_to_github():
+        return 500, {"message": "Upload function not loaded"}
 
 # Carrega variáveis de ambiente
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
-GOOGLE_AI_API_KEY = os.getenv("GOOGLE_AI_API_KEY")
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 # IDs permitidos
@@ -44,17 +46,12 @@ def _int_env(name):
         return int(os.getenv(name, "0"))
     except ValueError:
         return 0
-
 ALLOWED_GUILD_ID = _int_env("ALLOWED_GUILD_ID")
 ALLOWED_USER_ID = _int_env("ALLOWED_USER_ID")
 CANAL_DESTINO_ID = _int_env("CANAL_DESTINO_ID")
 
-# Inicialização dos clients
+# Inicialização do client Groq
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-ai_client = None
-if GOOGLE_AI_API_KEY:
-    genai.configure(api_key=GOOGLE_AI_API_KEY)
-    ai_client = genai
 
 # Discord bot setup
 intents = discord.Intents.default()
@@ -65,12 +62,12 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
-# Utilitário para mensagens longas
+# Função utilitária para mensagens longas
 async def send_long_message(ctx, message: str, limit: int = 2000):
     for i in range(0, len(message), limit):
         await ctx.send(message[i:i+limit])
 
-# Verifica autorização
+# Autorização
 def autorizado(ctx):
     if isinstance(ctx.channel, discord.DMChannel):
         return ctx.author.id == ALLOWED_USER_ID
@@ -78,21 +75,54 @@ def autorizado(ctx):
         return ctx.guild.id == ALLOWED_GUILD_ID
     return False
 
-# Geração de conteúdo via Groq
+# Função para carregar histórico
+def carregar_historico():
+    try:
+        with open(HISTORICO_FILE_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {'palavras': [], 'frases': []}
+    except Exception:
+        return {'palavras': [], 'frases': []}
+
+# Função para salvar histórico
+def salvar_historico(hist):
+    try:
+        with open(HISTORICO_FILE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(hist, f, ensure_ascii=False, indent=2)
+        # dispara upload para GitHub
+        import asyncio; asyncio.create_task(upload_to_github())
+    except Exception:
+        traceback.print_exc()
+
+# Geração de conteúdo via Groq com histórico
 async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível (sem chave Groq)."
+    hist = carregar_historico()
     try:
-        prompt = "Traga uma palavra em inglês com significado, exemplo em uma frase e tradução da frase. Também traga uma frase estoica e explicação da reflexão."
+        prompt = (
+            f"Crie uma palavra em inglês (significado, exemplo) e uma frase estoica. "
+            f"Evite repetir estas: {hist['palavras'][-5:]}, {hist['frases'][-5:]}."
+        )
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
             messages=[
-                {"role": "system", "content": "1 Professor de inglês e 1 estoico"},
+                {"role": "system", "content": "Professor de inglês e estoico."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.85
         )
-        return resp.choices[0].message.content
+        conteúdo = resp.choices[0].message.content
+        # extrai palavra e frase do conteúdo (assume linha 1 palavra, linha 2 frase)
+        linhas = [l.strip() for l in conteúdo.split('\n') if l.strip()]
+        if len(linhas) >= 2:
+            palavra = linhas[0]
+            frase = linhas[1]
+            hist['palavras'].append(palavra)
+            hist['frases'].append(frase)
+            salvar_historico(hist)
+        return conteúdo
     except Exception:
         traceback.print_exc()
         return "⚠️ Falha ao gerar conteúdo."
@@ -123,25 +153,20 @@ async def ask(ctx, *, pergunta: str):
     if not autorizado(ctx):
         await ctx.send("❌ Não autorizado.")
         return
-    hist = conversas[ctx.channel.id]
-    hist.append({"role": "user", "content": pergunta})
+    hist_chan = conversas[ctx.channel.id]
+    hist_chan.append({"role": "user", "content": pergunta})
     try:
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
-            messages=list(hist),
+            messages=list(hist_chan),
             temperature=0.7
         )
         texto = resp.choices[0].message.content
-        hist.append({"role": "assistant", "content": texto})
+        hist_chan.append({"role": "assistant", "content": texto})
         await send_long_message(ctx, texto)
-        return
-    except NotFoundError:
-        await ctx.send(f"❌ Modelo '{LLAMA_MODEL}' não encontrado. Ajuste LLAMA_MODEL.")
         return
     except Exception:
         traceback.print_exc()
-        if hist and hist[-1]["role"] == "assistant":
-            hist.pop()
         await ctx.send("❌ Erro ao processar a pergunta.")
         return
 
@@ -196,31 +221,6 @@ async def testar_conteudo(ctx):
         return
     conteudo = await gerar_conteudo_com_ia()
     await send_long_message(ctx, conteudo)
-
-# Comando !img usando Google Generative AI
-@bot.command()
-async def img(ctx, *, prompt: str):
-    if not ai_client:
-        await ctx.send("❌ Google AI não configurado.")
-        return
-    if not autorizado(ctx):
-        await ctx.send("❌ Não autorizado.")
-        return
-    try:
-        response = genai.Image.create(
-            prompt=prompt,
-            model="gemini-2.0-flash-exp-image-generation",
-            size="1024x1024"
-        )
-        url = response["images"][0]["imageUri"]
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as r:
-                data = await r.read()
-                await ctx.send(file=discord.File(io.BytesIO(data), filename="image.png"))
-    except Exception:
-        traceback.print_exc()
-        await ctx.send("❌ Erro ao gerar imagem com Google Generative AI.")
-        return
 
 # Keep-alive Flask
 app = Flask(__name__)
