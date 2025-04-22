@@ -132,19 +132,19 @@ async def gerar_conteudo_com_ia() -> str:
     if frase:
         hist['frases'].append(frase)
     salvar_historico(hist)
-        # Formata saída para Discord
+    # Formata saída para Discord
     return (
-        f"**Palavra:** {data['palavra']}
+        f"Palavra: {data['palavra']}
 "
-        f"**Definição:** {data['definicao']}
+        f"Definição: {data['definicao']}
 "
-        f"**Exemplo:** {data['exemplo']}
+        f"Exemplo: {data['exemplo']}
 "
-        f"**Tradução do exemplo:** {data['exemplo_traducao']}
+        f"Tradução do exemplo: {data['exemplo_traducao']}
 "
-        f"**Frase estoica:** {data['frase_estoica']}
+        f"Frase estoica: {data['frase_estoica']}
 "
-        f"**Explicação:** {data['explicacao_frase']}"
+        f"Explicação: {data['explicacao_frase']}"
     )
 
 # Loop diário
