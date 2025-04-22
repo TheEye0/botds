@@ -76,18 +76,39 @@ def autorizado(ctx):
     return False
 
 # Histórico de conteúdo
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-HIST_FILE = os.path.join(BASE_DIR, HISTORICO_FILE_PATH)
-
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO = os.getenv("GITHUB_REPO")
+# Caminho do arquivo no repositório GitHub
 def carregar_historico():
+    # Busca o histórico diretamente do GitHub via API
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_FILE_PATH}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
     try:
-        with open(HIST_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {'palavras': [], 'frases': []}
-
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            j = r.json()
+            content_b64 = j.get("content", "")
+            raw = base64.b64decode(content_b64)
+            return json.loads(raw)
+        else:
+            print(f"[Hist] GitHub GET status {r.status_code}, usando histórico vazio.")
+    except Exception as e:
+        print(f"[Hist] Erro ao baixar histórico: {e}")
+    return {'palavras': [], 'frases': []}
 
 def salvar_historico(hist):
+    # Salva local e faz upload para GitHub
+    with open(os.path.basename(HISTORICO_FILE_PATH), 'w', encoding='utf-8') as f:
+        json.dump(hist, f, ensure_ascii=False, indent=2)
+    try:
+        upload_to_github()
+    except Exception:
+        traceback.print_exc()
+
+# Geração de conteúdo via Groq (texto formatado)(hist):
     try:
         with open(HIST_FILE, 'w', encoding='utf-8') as f:
             json.dump(hist, f, ensure_ascii=False, indent=2)
