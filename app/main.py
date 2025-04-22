@@ -61,9 +61,11 @@ bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
 # Função para enviar mensagens longas
-async def send_long_message(ctx, message: str, limit: int = 2000):
-    for i in range(0, len(message), limit):
-        await ctx.send(message[i:i+limit])
+def send_long_message(ctx, message: str, limit: int = 2000):
+    async def _send():
+        for i in range(0, len(message), limit):
+            await ctx.send(message[i:i+limit])
+    return bot.loop.create_task(_send())
 
 # Verifica autorização
 def autorizado(ctx):
@@ -81,6 +83,7 @@ def carregar_historico():
     except:
         return {'palavras': [], 'frases': []}
 
+
 def salvar_historico(hist):
     try:
         with open(HISTORICO_FILE_PATH, 'w', encoding='utf-8') as f:
@@ -97,7 +100,6 @@ async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível."
     hist = carregar_historico()
-    # Prompt para criar palavra e frase estoica com explicação
     prompt = """
 Crie uma palavra em inglês com definição, exemplo em inglês e tradução para o português.
 Em seguida, forneça uma frase estoica em inglês com sua explicação em português.
@@ -109,34 +111,6 @@ Tradução do exemplo: <tradução>
 Frase estoica: <frase em inglês>
 Explicação: <explicação em português>
 """
-    try:
-        resp = groq_client.chat.completions.create(
-            model=LLAMA_MODEL,
-            messages=[
-                {"role": "system", "content": "Você é um professor de inglês e filosofia estoica."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
-        )
-        content = resp.choices[0].message.content.strip()
-    except Exception:
-        traceback.print_exc()
-        return f"Erro ao gerar conteúdo: {resp if 'resp' in locals() else ''}"
-    # Extrai palavra e frase estoica para histórico
-    lines = content.splitlines()
-    palavra = None
-    frase = None
-    for line in lines:
-        if line.startswith("Palavra:"):
-            palavra = line.split("Palavra:",1)[1].strip()
-        if line.startswith("Frase estoica:"):
-            frase = line.split("Frase estoica:",1)[1].strip()
-    if palavra:
-        hist['palavras'].append(palavra)
-    if frase:
-        hist['frases'].append(frase)
-    salvar_historico(hist)
-    return content
     try:
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
@@ -220,14 +194,14 @@ async def search(ctx, *, consulta: str):
     except Exception:
         traceback.print_exc()
         return await ctx.send("❌ Erro na busca.")
-    prompt = f"Resuma em português os resultados:\n{snip}"
+    prompt2 = f"Resuma em português os resultados: \n{snip}"
     try:
-        resp = groq_client.chat.completions.create(
+        resp2 = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
-            messages=[{"role":"system","content":"Resuma resultados."},{"role":"user","content":prompt}],
+            messages=[{"role":"system","content":"Resuma resultados."},{"role":"user","content":prompt2}],
             temperature=0.3
         )
-        return await send_long_message(ctx, resp.choices[0].message.content)
+        return await send_long_message(ctx, resp2.choices[0].message.content)
     except Exception:
         traceback.print_exc()
         return await ctx.send("❌ Erro ao resumir.")
