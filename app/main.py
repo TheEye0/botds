@@ -51,7 +51,7 @@ CANAL_DESTINO_ID = _int_env("CANAL_DESTINO_ID")
 # Inicializa Groq
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# Configura bot Discord
+# Configuração do Discord Bot
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -60,12 +60,10 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
-# Envia mensagem longa em partes
-def send_long_message(ctx, message: str, limit: int = 2000):
-    async def _send():
-        for i in range(0, len(message), limit):
-            await ctx.send(message[i:i+limit])
-    return bot.loop.create_task(_send())
+# Função para enviar mensagens longas
+async def send_long_message(ctx, message: str, limit: int = 2000):
+    for i in range(0, len(message), limit):
+        await ctx.send(message[i:i+limit])
 
 # Verifica autorização
 def autorizado(ctx):
@@ -75,7 +73,7 @@ def autorizado(ctx):
         return ctx.guild.id == ALLOWED_GUILD_ID
     return False
 
-# Histórico
+# Histórico de conteúdo
 def carregar_historico():
     try:
         with open(HISTORICO_FILE_PATH, 'r', encoding='utf-8') as f:
@@ -89,9 +87,9 @@ def salvar_historico(hist):
             json.dump(hist, f, ensure_ascii=False, indent=2)
         try:
             upload_to_github()
-        except:
+        except Exception:
             traceback.print_exc()
-    except:
+    except Exception:
         traceback.print_exc()
 
 # Geração de conteúdo via Groq (JSON estruturado)
@@ -99,7 +97,6 @@ async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível."
     hist = carregar_historico()
-    # Prompt aprimorado: instruções claras para JSON puro
     prompt = (
         "Por favor, responda apenas com um objeto JSON válido, sem markdown ou explicações adicionais, contendo as chaves: "
         "palavra, definicao, exemplo, exemplo_traducao, frase_estoica, explicacao_frase. "
@@ -115,7 +112,6 @@ async def gerar_conteudo_com_ia() -> str:
             temperature=0.7
         )
         content = resp.choices[0].message.content.strip()
-        # Remove possíveis blocos de código markdown
         if content.startswith('```'):
             parts = content.split('```')
             if len(parts) >= 2:
@@ -124,7 +120,6 @@ async def gerar_conteudo_com_ia() -> str:
     except Exception:
         traceback.print_exc()
         return f"Erro ao processar JSON: {content}"
-    # Atualiza histórico
     palavra = data.get('palavra')
     frase = data.get('frase_estoica')
     if palavra:
@@ -132,18 +127,12 @@ async def gerar_conteudo_com_ia() -> str:
     if frase:
         hist['frases'].append(frase)
     salvar_historico(hist)
-    # Formata saída para Discord
     return (
-        f"Palavra: {data['palavra']}
-"
-        f"Definição: {data['definicao']}
-"
-        f"Exemplo: {data['exemplo']}
-"
-        f"Tradução do exemplo: {data['exemplo_traducao']}
-"
-        f"Frase estoica: {data['frase_estoica']}
-"
+        f"Palavra: {data['palavra']}\n"
+        f"Definição: {data['definicao']}\n"
+        f"Exemplo: {data['exemplo']}\n"
+        f"Tradução do exemplo: {data['exemplo_traducao']}\n"
+        f"Frase estoica: {data['frase_estoica']}\n"
         f"Explicação: {data['explicacao_frase']}"
     )
 
@@ -174,7 +163,8 @@ async def ask(ctx, *, pergunta: str):
     try:
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
-            messages=list(hist), temperature=0.7
+            messages=list(hist),
+            temperature=0.7
         )
         texto = resp.choices[0].message.content
         hist.append({"role":"assistant","content":texto})
@@ -204,8 +194,7 @@ async def search(ctx, *, consulta: str):
     try:
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
-            messages=[{"role":"system","content":"Resuma resultados."},
-                      {"role":"user","content":prompt}],
+            messages=[{"role":"system","content":"Resuma resultados."},{"role":"user","content":prompt}],
             temperature=0.3
         )
         return await send_long_message(ctx, resp.choices[0].message.content)
@@ -226,9 +215,10 @@ app = Flask(__name__)
 def home():
     return f"Bot {bot.user.name if bot.user else ''} online!"
 
-def run_server():
-    port = int(os.getenv('PORT',10000))
-    app.run(host='0.0.0.0',port=port)
+# Keep-alive server
+ def run_server():
+     port = int(os.getenv('PORT',10000))
+     app.run(host='0.0.0.0',port=port)
 
 # Inicia bot
 if __name__ == '__main__':
