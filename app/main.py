@@ -83,11 +83,11 @@ async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível (sem chave Groq)."
     try:
-        prompt = "Crie palavra em inglês (significado, exemplo) e frase estoica."
+        prompt = "Traga uma palavra em inglês com significado, exemplo em uma frase e tradução da frase. Também traga uma frase estoica e explicação da reflexão."
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
             messages=[
-                {"role": "system", "content": "Professor de inglês/estoico"},
+                {"role": "system", "content": "1 Professor de inglês e 1 estoico"},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.85
