@@ -2,12 +2,14 @@
 """
 main.py - BotDS Discord Bot com integração Groq e Google Gemini
 
-Correções e finalização:
-- Adicionado comando !testar_conteudo
-- Fluxos de exceção com returns para evitar duplicação de mensagens
-- Comando !img ajustado para usar genai.Image.create
-- Inclusão completa de !search
-- Função run_server definida corretamente
+Correções e integração final:
+- Comando !testar_conteudo restaurado
+- !img migrado para Google GenAI SDK (gemini-2.0-flash-exp-image-generation)
+- Parametrização de modelo Llama via variável de ambiente LLAMA_MODEL
+- Fluxos de exceção com return antecipado para evitar duplicação de mensagens
+- Inclusão completa de comando !search
+- `enviar_conteudo_diario` definido antes de on_ready
+- `run_server` para keep-alive com Flask
 """
 import base64
 import discord
@@ -25,7 +27,8 @@ import io
 # APIs
 from groq import Groq, NotFoundError
 from serpapi import GoogleSearch
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -49,12 +52,11 @@ CANAL_DESTINO_ID = _int_env("CANAL_DESTINO_ID")
 # Inicialização dos clients
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 if GOOGLE_AI_API_KEY:
-    genai.configure(api_key=GOOGLE_AI_API_KEY)
-    google_client = genai.Image
+    ai_client = genai.Client(api_key=GOOGLE_AI_API_KEY)
 else:
-    google_client = None
+    ai_client = None
 
-# Configuração do Discord Bot
+# Discord bot setup
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -63,12 +65,12 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
-# Função utilitária para mensagens longas
+# Utilitário para mensagens longas
 def send_long_message(ctx, message: str, limit: int = 2000):
     for i in range(0, len(message), limit):
-        ctx.send(message[i:i+limit])
+        await ctx.send(message[i:i+limit])  # corrigido para await
 
-# Verifica autorização
+# Autorização
 def autorizado(ctx):
     if isinstance(ctx.channel, discord.DMChannel):
         return ctx.author.id == ALLOWED_USER_ID
@@ -76,8 +78,8 @@ def autorizado(ctx):
         return ctx.guild.id == ALLOWED_GUILD_ID
     return False
 
-# Geração de conteúdo via Groq
-def gerar_conteudo_com_ia() -> str:
+# Conteúdo via Groq
+async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível (sem chave Groq)."
     try:
@@ -95,7 +97,7 @@ def gerar_conteudo_com_ia() -> str:
         traceback.print_exc()
         return "⚠️ Falha ao gerar conteúdo."
 
-# Tarefa de conteúdo diário
+# Tarefa diária
 @tasks.loop(minutes=1)
 async def enviar_conteudo_diario():
     now = datetime.datetime.now()
@@ -132,13 +134,16 @@ async def ask(ctx, *, pergunta: str):
         texto = resp.choices[0].message.content
         hist.append({"role": "assistant", "content": texto})
         await send_long_message(ctx, texto)
+        return
     except NotFoundError:
         await ctx.send(f"❌ Modelo '{LLAMA_MODEL}' não encontrado. Ajuste LLAMA_MODEL.")
+        return
     except Exception:
         traceback.print_exc()
         if hist and hist[-1]["role"] == "assistant":
             hist.pop()
         await ctx.send("❌ Erro ao processar a pergunta.")
+        return
 
 # Comando !search
 @bot.command()
@@ -181,6 +186,7 @@ async def search(ctx, *, consulta: str):
     except Exception:
         traceback.print_exc()
         await ctx.send("❌ Erro ao resumir resultados.")
+        return
 
 # Comando !testar_conteudo
 @bot.command()
@@ -191,29 +197,35 @@ async def testar_conteudo(ctx):
     conteudo = await gerar_conteudo_com_ia()
     await send_long_message(ctx, conteudo)
 
-# Comando !img usando Gemini
+# Comando !img usando Google GenAI SDK
 @bot.command()
 async def img(ctx, *, prompt: str):
-    if not google_client:
+    if not ai_client:
         await ctx.send("❌ Google AI não configurado.")
         return
     if not autorizado(ctx):
         await ctx.send("❌ Não autorizado.")
         return
+    contents = [{"text": prompt}]
     try:
-        response = google_client.create(
+        response = ai_client.models.generate_content(
             model="gemini-2.0-flash-exp-image-generation",
-            prompt=prompt,
-            size="1024x1024"
+            contents=contents,
+            config=types.GenerateContentConfig(response_modalities=["TEXT","IMAGE"])
         )
-        image_url = response["images"][0]["imageUri"]
-        async with aiohttp.ClientSession() as session:
-            async with session.get(image_url) as r:
-                data = await r.read()
+        for part in response.candidates[0].content.parts:
+            if part.text:
+                await ctx.send(part.text)
+            elif part.inline_data and part.inline_data.data:
+                img_bytes = part.inline_data.data
+                data = base64.b64decode(img_bytes)
                 await ctx.send(file=discord.File(io.BytesIO(data), filename="gemini.png"))
+                return
     except Exception:
         traceback.print_exc()
         await ctx.send("❌ Erro ao gerar imagem com Gemini.")
+        return
+    await ctx.send("❌ Nenhuma imagem gerada.")
 
 # Keep-alive Flask
 app = Flask(__name__)
@@ -221,7 +233,7 @@ app = Flask(__name__)
 def home():
     return f"Bot {bot.user.name if bot.user else ''} está online!"
 
-# Função de servidor para keep-alive
+# Keep-alive server
 def run_server():
     port = int(os.getenv('PORT', 10000))
     app.run(host='0.0.0.0', port=port, use_reloader=False)
