@@ -2,14 +2,12 @@
 """
 main.py - BotDS Discord Bot com integração Groq e Google Gemini
 
-Correções:
-- Parametrização de modelo Llama via variável de ambiente LLAMA_MODEL
-- Tratamento de exceções com return antecipado para evitar duplicações
-- Comando !img refatorado para usar Gemini 2.0 Flash Experimental corretamente
-- Inclusão de comando !search completo
-- Definição de enviar_conteudo_diario antes de on_ready
-- Import correto de types para Google Generative AI
-- Definição de run_server para keep-alive
+Correções e finalização:
+- Adicionado comando !testar_conteudo
+- Fluxos de exceção com returns para evitar duplicação de mensagens
+- Comando !img ajustado para usar genai.Image.create
+- Inclusão completa de !search
+- Função run_server definida corretamente
 """
 import base64
 import discord
@@ -21,16 +19,13 @@ from collections import defaultdict, deque
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
+import aiohttp
+import io
 
 # APIs
 from groq import Groq, NotFoundError
 from serpapi import GoogleSearch
 import google.generativeai as genai
-from google.generativeai import types
-
-# Utilitários
-import aiohttp
-import io
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -55,7 +50,7 @@ CANAL_DESTINO_ID = _int_env("CANAL_DESTINO_ID")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 if GOOGLE_AI_API_KEY:
     genai.configure(api_key=GOOGLE_AI_API_KEY)
-    google_client = genai
+    google_client = genai.Image
 else:
     google_client = None
 
@@ -69,9 +64,9 @@ bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
 # Função utilitária para mensagens longas
-async def send_long_message(ctx, message: str, limit: int = 2000):
+def send_long_message(ctx, message: str, limit: int = 2000):
     for i in range(0, len(message), limit):
-        await ctx.send(message[i:i+limit])
+        ctx.send(message[i:i+limit])
 
 # Verifica autorização
 def autorizado(ctx):
@@ -82,7 +77,7 @@ def autorizado(ctx):
     return False
 
 # Geração de conteúdo via Groq
-async def gerar_conteudo_com_ia() -> str:
+def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível (sem chave Groq)."
     try:
@@ -121,9 +116,11 @@ async def on_ready():
 @bot.command()
 async def ask(ctx, *, pergunta: str):
     if not groq_client:
-        return await ctx.send("❌ Serviço de chat indisponível.")
+        await ctx.send("❌ Serviço de chat indisponível.")
+        return
     if not autorizado(ctx):
-        return await ctx.send("❌ Não autorizado.")
+        await ctx.send("❌ Não autorizado.")
+        return
     hist = conversas[ctx.channel.id]
     hist.append({"role": "user", "content": pergunta})
     try:
@@ -134,36 +131,38 @@ async def ask(ctx, *, pergunta: str):
         )
         texto = resp.choices[0].message.content
         hist.append({"role": "assistant", "content": texto})
-        return await send_long_message(ctx, texto)
+        await send_long_message(ctx, texto)
     except NotFoundError:
-        return await ctx.send(f"❌ Modelo '{LLAMA_MODEL}' não encontrado. Ajuste LLAMA_MODEL.")
+        await ctx.send(f"❌ Modelo '{LLAMA_MODEL}' não encontrado. Ajuste LLAMA_MODEL.")
     except Exception:
         traceback.print_exc()
         if hist and hist[-1]["role"] == "assistant":
             hist.pop()
-        return await ctx.send("❌ Erro ao processar a pergunta.")
+        await ctx.send("❌ Erro ao processar a pergunta.")
 
 # Comando !search
 @bot.command()
 async def search(ctx, *, consulta: str):
     if not groq_client or not SERPAPI_KEY:
-        return await ctx.send("❌ Serviço de busca+resumo indisponível.")
+        await ctx.send("❌ Serviço de busca+resumo indisponível.")
+        return
     if not autorizado(ctx):
-        return await ctx.send("❌ Não autorizado.")
+        await ctx.send("❌ Não autorizado.")
+        return
     await ctx.send(f"🔍 Buscando por: {consulta}")
     try:
-        search_api = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
-        resultados = search_api.get_dict()
+        api = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
+        resultados = api.get_dict()
         organic = resultados.get("organic_results", [])[:3]
         if not organic:
-            return await ctx.send("Nenhum resultado relevante encontrado.")
-        respostas = []
-        for res in organic:
-            respostas.append(f"**{res.get('title')}**: {res.get('snippet')} ({res.get('link')})")
+            await ctx.send("Nenhum resultado relevante encontrado.")
+            return
+        respostas = [f"**{r.get('title')}**: {r.get('snippet')} ({r.get('link')})" for r in organic]
         snippet = "\n\n".join(respostas)
     except Exception:
         traceback.print_exc()
-        return await ctx.send("❌ Erro ao buscar na web.")
+        await ctx.send("❌ Erro ao buscar na web.")
+        return
     prompt = (
         f"Você recebeu a consulta: '{consulta}'.\n"
         f"Resultados da busca abaixo:\n{snippet}\n"
@@ -178,45 +177,43 @@ async def search(ctx, *, consulta: str):
             ],
             temperature=0.3
         )
-        return await send_long_message(ctx, resp.choices[0].message.content)
+        await send_long_message(ctx, resp.choices[0].message.content)
     except Exception:
         traceback.print_exc()
-        return await ctx.send("❌ Erro ao resumir resultados.")
+        await ctx.send("❌ Erro ao resumir resultados.")
+
+# Comando !testar_conteudo
+@bot.command()
+async def testar_conteudo(ctx):
+    if not autorizado(ctx):
+        await ctx.send("❌ Não autorizado.")
+        return
+    conteudo = await gerar_conteudo_com_ia()
+    await send_long_message(ctx, conteudo)
 
 # Comando !img usando Gemini
 @bot.command()
 async def img(ctx, *, prompt: str):
     if not google_client:
-        return await ctx.send("❌ Google AI não configurado.")
+        await ctx.send("❌ Google AI não configurado.")
+        return
     if not autorizado(ctx):
-        return await ctx.send("❌ Não autorizado.")
-    contents = [{"parts": [{"text": prompt}]}]
-    if ctx.message.attachments:
-        attachment = ctx.message.attachments[0]
-        img_bytes = await attachment.read()
-        b64 = base64.b64encode(img_bytes).decode()
-        contents.append({"parts": [{"inlineData": {"data": b64}}]})
+        await ctx.send("❌ Não autorizado.")
+        return
     try:
-        model = google_client.GenerativeModel(
-            model_name="gemini-2.0-flash-exp-image-generation"
+        response = google_client.create(
+            model="gemini-2.0-flash-exp-image-generation",
+            prompt=prompt,
+            size="1024x1024"
         )
-        config = types.GenerateContentConfig(
-            response_modalities=["TEXT", "IMAGE"]
-        )
-        response = await model.generate_content_async(
-            contents=contents,
-            generation_config=config
-        )
+        image_url = response["images"][0]["imageUri"]
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_url) as r:
+                data = await r.read()
+                await ctx.send(file=discord.File(io.BytesIO(data), filename="gemini.png"))
     except Exception:
         traceback.print_exc()
-        return await ctx.send("❌ Erro ao gerar imagem com Gemini.")
-    for part in response.candidates[0].content.parts:
-        if getattr(part, 'text', None):
-            await ctx.send(part.text)
-        elif getattr(part, 'inlineData', None) and part.inlineData.data:
-            data = base64.b64decode(part.inlineData.data)
-            return await ctx.send(file=discord.File(io.BytesIO(data), filename="gemini.png"))
-    return await ctx.send("❌ Nenhuma imagem gerada.")
+        await ctx.send("❌ Erro ao gerar imagem com Gemini.")
 
 # Keep-alive Flask
 app = Flask(__name__)
