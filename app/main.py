@@ -89,14 +89,22 @@ async def gerar_conteudo_com_ia() -> str:
 
     hist = carregar_historico()
     prompt = (
-        """Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
-        "Depois, forneça uma frase estoica em português acompanhada de explicação.\n"
-        "Use exatamente este formato, **uma informação por linha** e sem títulos extras:\n"
-        "Palavra: <palavra>\n"
-        "Definição: <definição em português>\n"
-        "Exemplo: <exemplo em inglês>\n"
-        "Tradução do exemplo: <tradução em português>\n"
-        "Frase estoica: <frase em português>\n"
+        """Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).
+"
+        "Depois, forneça uma frase estoica em português acompanhada de explicação.
+"
+        "Use exatamente este formato, **uma informação por linha** e sem títulos extras:
+"
+        "Palavra: <palavra>
+"
+        "Definição: <definição em português>
+"
+        "Exemplo: <exemplo em inglês>
+"
+        "Tradução do exemplo: <tradução em português>
+"
+        "Frase estoica: <frase em português>
+"
         "Explicação: <explicação em português>"""
     )
 
@@ -128,7 +136,7 @@ async def gerar_conteudo_com_ia() -> str:
         updated = True
 
     if updated:
-        await salvar_historico(hist)
+        salvar_historico(hist)
 
     return raw
 
