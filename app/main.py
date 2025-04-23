@@ -44,32 +44,47 @@ def autorizado(ctx):
     return (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER) or \
            (ctx.guild and ctx.guild.id == ALLOWED_GUILD)
 
-# Load or create local history file
+# --- Histórico via GitHub API ---
 def carregar_historico():
+    """
+    Faz GET no GitHub Contents API e retorna (histórico dict, sha string).
+    Se o arquivo não existir, retorna estruturas vazias e sha None.
+    """
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HIST_FILE_PATH}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"palavras": [], "frases": []}
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.ok:
+            data = resp.json()
+            raw = base64.b64decode(data.get("content", ""))
+            hist = json.loads(raw)
+            sha = data.get("sha")
+            return hist, sha
     except Exception:
         traceback.print_exc()
-        return {"palavras": [], "frases": []}
+    # Se falhar, retorna vazio e sem sha
+    return {"palavras": [], "frases": []}, None
 
-# Save history locally and optionally upload to GitHub
-def salvar_historico(hist: dict):
+# Atualiza via GitHub Contents API
+
+def salvar_historico(hist: dict, sha: str = None):
+    """
+    Faz PUT no GitHub Contents API para atualizar historico.json com novo conteúdo.
+    Usa sha para sobrescrever a versão correta.
+    """
     try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(hist, f, ensure_ascii=False, indent=2)
-        # Optional: upload to GitHub if uploader present
-        try:
-            from github_uploader import upload_to_github
-            upload_to_github()
-        except ImportError:
-            pass  # uploader not available
-        except Exception:
-            traceback.print_exc()
+        content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False).encode()).decode()
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HIST_FILE_PATH}"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+        payload = {
+            "message": "Atualiza historico.json pelo bot",
+            "content": content_b64,
+            "branch": "main"
+        }
+        if sha:
+            payload["sha"] = sha
+        put_resp = requests.put(url, headers=headers, json=payload, timeout=10)
+        put_resp.raise_for_status()
     except Exception:
         traceback.print_exc()
 
