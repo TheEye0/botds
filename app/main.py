@@ -7,8 +7,11 @@ import os
 import json
 import datetime
 import traceback
+import base64
+import requests
 from collections import defaultdict, deque
 from threading import Thread
+
 import discord
 from discord.ext import commands, tasks
 from flask import Flask
@@ -25,11 +28,18 @@ ALLOWED_GUILD   = int(os.getenv("ALLOWED_GUILD_ID", "0"))
 ALLOWED_USER    = int(os.getenv("ALLOWED_USER_ID", "0"))
 DEST_CHANNEL    = int(os.getenv("CANAL_DESTINO_ID", "0"))
 LLAMA_MODEL     = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
 # GitHub upload optional
 GITHUB_TOKEN    = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO     = os.getenv("GITHUB_REPO")
+
 # Local history path
-HISTORY_FILE    = os.path.join(os.path.dirname(__file__), os.getenv("HISTORICO_FILE_PATH", "historico.json"))
+HISTORY_FILE    = os.path.join(
+    os.path.dirname(__file__),
+    os.getenv("HISTORICO_FILE_PATH", "historico.json")
+)
+# Path for GitHub API
+HIST_FILE_PATH  = os.getenv("HISTORICO_FILE_PATH", "historico.json")
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
@@ -41,8 +51,10 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # --- Helpers ---
 def autorizado(ctx):
-    return (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER) or \
-           (ctx.guild and ctx.guild.id == ALLOWED_GUILD)
+    return (
+        (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER) or
+        (ctx.guild and ctx.guild.id == ALLOWED_GUILD)
+    )
 
 # --- Histórico via GitHub API ---
 def carregar_historico():
@@ -62,10 +74,8 @@ def carregar_historico():
             return hist, sha
     except Exception:
         traceback.print_exc()
-    # Se falhar, retorna vazio e sem sha
     return {"palavras": [], "frases": []}, None
 
-# Atualiza via GitHub Contents API
 
 def salvar_historico(hist: dict, sha: str = None):
     """
@@ -73,7 +83,9 @@ def salvar_historico(hist: dict, sha: str = None):
     Usa sha para sobrescrever a versão correta.
     """
     try:
-        content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False).encode()).decode()
+        content_b64 = base64.b64encode(
+            json.dumps(hist, ensure_ascii=False).encode()
+        ).decode()
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HIST_FILE_PATH}"
         headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
         payload = {
@@ -93,16 +105,16 @@ async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível."
 
-    hist = carregar_historico()
+    hist, sha = carregar_historico()
     prompt = (
-        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
-        "Depois, forneça uma frase estoica em português com explicação.\n"
-        "Use este formato exato (uma linha por item):\n"
-        "Palavra: <palavra>\n"
-        "Definição: <definição em português>\n"
-        "Exemplo: <exemplo em inglês>\n"
-        "Tradução do exemplo: <tradução em português>\n"
-        "Frase estoica: <frase em português>\n"
+        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução)." +
+        "Depois, forneça uma frase estoica em português com explicação.\n" +
+        "Use este formato exato (uma linha por item):\n" +
+        "Palavra: <palavra>\n" +
+        "Definição: <definição em português>\n" +
+        "Exemplo: <exemplo em inglês>\n" +
+        "Tradução do exemplo: <tradução em português>\n" +
+        "Frase estoica: <frase em português>\n" +
         "Explicação: <explicação em português>"
     )
     resp = groq_client.chat.completions.create(
@@ -114,32 +126,29 @@ async def gerar_conteudo_com_ia() -> str:
         temperature=0.7
     ).choices[0].message.content.strip()
 
-    # Remove potential repetition by splitting at second block
     lower = resp.lower()
     first = lower.find("palavra:")
-    second = lower.find("palavra:", first+1)
+    second = lower.find("palavra:", first + 1)
     if second != -1:
         resp = resp[:second].strip()
 
-    # Parse lines
     palavra = None
     frase = None
     for line in resp.splitlines():
         if line.lower().startswith("palavra:"):
-            palavra = line.split(":",1)[1].strip()
+            palavra = line.split(":", 1)[1].strip()
         elif line.lower().startswith("frase estoica:"):
-            frase = line.split(":",1)[1].strip()
+            frase = line.split(":", 1)[1].strip()
 
     updated = False
-    # Update history if new
-    if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras",[])]:
-        hist.setdefault("palavras",[]).append(palavra)
+    if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
+        hist.setdefault("palavras", []).append(palavra)
         updated = True
-    if frase and frase.lower() not in [f.lower() for f in hist.get("frases",[])]:
-        hist.setdefault("frases",[]).append(frase)
+    if frase and frase.lower() not in [f.lower() for f in hist.get("frases", [])]:
+        hist.setdefault("frases", []).append(frase)
         updated = True
     if updated:
-        salvar_historico(hist)
+        salvar_historico(hist, sha)
 
     return resp
 
@@ -163,14 +172,24 @@ async def on_ready():
 async def ask(ctx, *, pergunta: str):
     if not autorizado(ctx) or not groq_client:
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
+    # 1) Adiciona a pergunta ao histórico
     hist_chan = conversas[ctx.channel.id]
-    hist_chan.append({"role":"user","content":pergunta})
+    hist_chan.append({"role": "user", "content": pergunta})
+
+    # 2) Constrói o prompt com contexto
+    mensagens = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
+
+    # 3) Chama a API com histórico
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=list(hist_chan),
+        messages=mensagens,
         temperature=0.7
     ).choices[0].message.content
-    hist_chan.append({"role":"assistant","content":resp})
+
+    # 4) Adiciona a resposta ao histórico
+    hist_chan.append({"role": "assistant", "content": resp})
+
+    # 5) Envia a resposta
     await ctx.send(resp)
 
 @bot.command()
@@ -178,11 +197,11 @@ async def search(ctx, *, consulta: str):
     if not autorizado(ctx) or not SERPAPI_KEY:
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     await ctx.send(f"🔍 Buscando: {consulta}")
-    results = GoogleSearch({"q":consulta,"hl":"pt-br","gl":"br","api_key":SERPAPI_KEY}).get_dict().get("organic_results",[])[:3]
+    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
     snippet = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
     resumo = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=[{"role":"system","content":"Resuma resultados."},{"role":"user","content":snippet}],
+        messages=[{"role": "system", "content": "Resuma resultados."}, {"role": "user", "content": snippet}],
         temperature=0.3
     ).choices[0].message.content
     await ctx.send(resumo)
@@ -200,7 +219,7 @@ def home():
     return f"Bot {bot.user.name if bot.user else ''} online!"
 
 def run_server():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)), use_reloader=False)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)), use_reloader=False)
 
 # --- Main ---
 if __name__ == "__main__":
