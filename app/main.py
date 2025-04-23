@@ -86,57 +86,50 @@ def salvar_historico(hist: dict):
 async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Groq não configurado."
-    hist = carregar_historico()
-    prompt = """
-Crie uma palavra em inglês (definição em pt, exemplo em en + tradução).
-Depois, uma frase estoica em pt com explicação.
-Formato exato (uma informação por linha, sem títulos extras):
-Palavra: <palavra>
-Definição: <definição em português>
-Exemplo: <exemplo em inglês>
-Tradução do exemplo: <tradução em português>
-Frase estoica: <frase em português>
-Explicação: <explicação em português>
-""".
-"
-        "Depois, uma frase estoica em pt com explicação. Formato exacto, linhas:"
 
-        "Palavra: <palavra>
-Definição: <def>
-Exemplo: <ex>
-Tradução do exemplo: <trad>
-"
-        "Frase estoica: <frase>
-Explicação: <explicação>"
+    hist = carregar_historico()
+    prompt = (
+        """Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
+        "Depois, forneça uma frase estoica em português acompanhada de explicação.\n"
+        "Use exatamente este formato, **uma informação por linha** e sem títulos extras:\n"
+        "Palavra: <palavra>\n"
+        "Definição: <definição em português>\n"
+        "Exemplo: <exemplo em inglês>\n"
+        "Tradução do exemplo: <tradução em português>\n"
+        "Frase estoica: <frase em português>\n"
+        "Explicação: <explicação em português>"""
     )
+
     raw = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[
-            {"role": "system", "content": "Professor de inglês + filosofia estoica."},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": "Professor de inglês e filosofia estoica."},
+            {"role": "user",   "content": prompt}
         ],
         temperature=0.7
     ).choices[0].message.content.strip()
 
-    # —— pós‑processamento: se modelo repetir bloco, mantenha só o primeiro ——
-    if raw.lower().count("palavra:") > 1:
-        idx_second = raw.lower().find("palavra:", raw.lower().find("palavra:") + 1)
-        raw = raw[:idx_second].strip()
+    # — PÓS-PROCESSAMENTO — se o modelo repetir o bloco, corta a partir da 2ª ocorrência
+    first_idx = raw.lower().find("palavra:")
+    second_idx = raw.lower().find("palavra:", first_idx + 1)
+    if second_idx != -1:
+        raw = raw[:second_idx].strip()
 
-    # Atualiza histórico apenas se inédito
-    palavra = next((l.split(":",1)[1].strip() for l in raw.splitlines() if l.lower().startswith("palavra:")), None)
-    frase   = next((l.split(":",1)[1].strip() for l in raw.splitlines() if l.lower().startswith("frase estoica:")), None)
-    hist_words = [p.lower() for p in hist["palavras"]]
-    hist_phr   = [f.lower() for f in hist["frases"]]
+    # Atualiza histórico somente se inédito
+    palavra = next((l.split(":", 1)[1].strip() for l in raw.splitlines() if l.lower().startswith("palavra:")), None)
+    frase   = next((l.split(":", 1)[1].strip() for l in raw.splitlines() if l.lower().startswith("frase estoica:")), None)
+
     updated = False
-    if palavra and palavra.lower() not in hist_words:
+    if palavra and palavra.lower() not in [p.lower() for p in hist["palavras"]]:
         hist["palavras"].append(palavra)
         updated = True
-    if frase and frase.lower() not in hist_phr:
+    if frase and frase.lower() not in [f.lower() for f in hist["frases"]]:
         hist["frases"].append(frase)
         updated = True
+
     if updated:
         await salvar_historico(hist)
+
     return raw
 
 # ───────── Loop diário ─────────
