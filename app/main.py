@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integrado com Groq + SerpApi e persistência de histórico (palavras / frases estoicas)
-em `historico.json` no repositório GitHub.
+Integra Groq + SerpApi e persiste histórico local em historico.json (com upload opcional ao GitHub).
 """
-import os, json, datetime, traceback, base64, requests
+import os
+import json
+import datetime
+import traceback
 from collections import defaultdict, deque
 from threading import Thread
-
 import discord
 from discord.ext import commands, tasks
 from flask import Flask
@@ -15,72 +16,73 @@ from dotenv import load_dotenv
 from groq import Groq
 from serpapi import GoogleSearch
 
-# ──────────────────── ENV ────────────────────
+# --- Environment ---
 load_dotenv()
-DISCORD_TOKEN  = os.getenv("DISCORD_TOKEN")
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY")
-SERPAPI_KEY    = os.getenv("SERPAPI_KEY")
-ALLOWED_GUILD  = int(os.getenv("ALLOWED_GUILD_ID", 0))
-ALLOWED_USER   = int(os.getenv("ALLOWED_USER_ID", 0))
-DEST_CHANNEL   = int(os.getenv("CANAL_DESTINO_ID", 0))
-LLAMA_MODEL    = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
-GITHUB_TOKEN   = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO    = os.getenv("GITHUB_REPO")
-HIST_FILE_PATH = os.getenv("HISTORICO_FILE_PATH", "historico.json")
+DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN")
+GROQ_API_KEY    = os.getenv("GROQ_API_KEY")
+SERPAPI_KEY     = os.getenv("SERPAPI_KEY")
+ALLOWED_GUILD   = int(os.getenv("ALLOWED_GUILD_ID", "0"))
+ALLOWED_USER    = int(os.getenv("ALLOWED_USER_ID", "0"))
+DEST_CHANNEL    = int(os.getenv("CANAL_DESTINO_ID", "0"))
+LLAMA_MODEL     = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+# GitHub upload optional
+GITHUB_TOKEN    = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO     = os.getenv("GITHUB_REPO")
+# Local history path
+HISTORY_FILE    = os.path.join(os.path.dirname(__file__), os.getenv("HISTORICO_FILE_PATH", "historico.json"))
 
-# ────────────────── Discord ──────────────────
+# --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
+bot = commands.Bot(command_prefix="!", intents=intents)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# ─────────────── Utilidades ────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOCAL_HISTORY = os.path.join(BASE_DIR, HIST_FILE_PATH)
-
+# --- Helpers ---
 def autorizado(ctx):
     return (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER) or \
            (ctx.guild and ctx.guild.id == ALLOWED_GUILD)
 
+# Load or create local history file
 def carregar_historico():
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HIST_FILE_PATH}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.ok:
-            raw = base64.b64decode(r.json()["content"])
-            with open(LOCAL_HISTORY, "wb") as f:
-                f.write(raw)
-            return json.loads(raw)
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"palavras": [], "frases": []}
     except Exception:
         traceback.print_exc()
-    # Fallback local
-    if os.path.exists(LOCAL_HISTORY):
-        with open(LOCAL_HISTORY, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"palavras": [], "frases": []}
+        return {"palavras": [], "frases": []}
 
+# Save history locally and optionally upload to GitHub
 def salvar_historico(hist: dict):
     try:
-        with open(LOCAL_HISTORY, "w", encoding="utf-8") as f:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(hist, f, ensure_ascii=False, indent=2)
-        from github_uploader import upload_to_github
-        upload_to_github()  # síncrono
+        # Optional: upload to GitHub if uploader present
+        try:
+            from github_uploader import upload_to_github
+            upload_to_github()
+        except ImportError:
+            pass  # uploader not available
+        except Exception:
+            traceback.print_exc()
     except Exception:
         traceback.print_exc()
 
-# ────────── IA: conteúdo diário ───────────
+# --- Generate daily content ---
 async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
-        return "⚠️ Groq não configurado."
+        return "⚠️ Serviço de geração indisponível."
 
     hist = carregar_historico()
     prompt = (
         "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
-        "Depois, forneça uma frase estoica em português acompanhada de explicação.\n"
-        "Use exatamente este formato, uma linha por item, sem títulos extras:\n"
+        "Depois, forneça uma frase estoica em português com explicação.\n"
+        "Use este formato exato (uma linha por item):\n"
         "Palavra: <palavra>\n"
         "Definição: <definição em português>\n"
         "Exemplo: <exemplo em inglês>\n"
@@ -88,73 +90,80 @@ async def gerar_conteudo_com_ia() -> str:
         "Frase estoica: <frase em português>\n"
         "Explicação: <explicação em português>"
     )
-
-    raw = groq_client.chat.completions.create(
+    resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[
-            {"role": "system", "content": "Professor de inglês e filosofia estoica."},
-            {"role": "user",   "content": prompt}
+            {"role": "system", "content": "Você é um professor de inglês e filosofia estoica."},
+            {"role": "user", "content": prompt}
         ],
         temperature=0.7
     ).choices[0].message.content.strip()
 
-    # —— remove duplicação se houver ——
-    first = raw.lower().find("palavra:")
-    second = raw.lower().find("palavra:", first + 1)
+    # Remove potential repetition by splitting at second block
+    lower = resp.lower()
+    first = lower.find("palavra:")
+    second = lower.find("palavra:", first+1)
     if second != -1:
-        raw = raw[:second].strip()
+        resp = resp[:second].strip()
 
-    palavra = next((l.split(":",1)[1].strip() for l in raw.splitlines() if l.lower().startswith("palavra:")), None)
-    frase   = next((l.split(":",1)[1].strip() for l in raw.splitlines() if l.lower().startswith("frase estoica:")), None)
+    # Parse lines
+    palavra = None
+    frase = None
+    for line in resp.splitlines():
+        if line.lower().startswith("palavra:"):
+            palavra = line.split(":",1)[1].strip()
+        elif line.lower().startswith("frase estoica:"):
+            frase = line.split(":",1)[1].strip()
 
     updated = False
-    if palavra and palavra.lower() not in [p.lower() for p in hist["palavras"]]:
-        hist["palavras"].append(palavra)
+    # Update history if new
+    if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras",[])]:
+        hist.setdefault("palavras",[]).append(palavra)
         updated = True
-    if frase and frase.lower() not in [f.lower() for f in hist["frases"]]:
-        hist["frases"].append(frase)
+    if frase and frase.lower() not in [f.lower() for f in hist.get("frases",[])]:
+        hist.setdefault("frases",[]).append(frase)
         updated = True
     if updated:
         salvar_historico(hist)
 
-    return raw
+    return resp
 
-# ───────── Loop diário ─────────
+# --- Daily loop ---
 @tasks.loop(minutes=1)
 async def enviar_conteudo_diario():
     now = datetime.datetime.now()
     if now.hour == 9 and now.minute == 0 and DEST_CHANNEL:
-        canal = bot.get_channel(DEST_CHANNEL)
-        if canal:
-            await canal.send(await gerar_conteudo_com_ia())
+        chan = bot.get_channel(DEST_CHANNEL)
+        if chan:
+            await chan.send(await gerar_conteudo_com_ia())
 
-# ─────────── Eventos ───────────
+# --- Events ---
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online como {bot.user} — servidores: {len(bot.guilds)}")
+    print(f"✅ Bot online: {bot.user} | Guilds: {len(bot.guilds)}")
     enviar_conteudo_diario.start()
 
-# ─────────── Comandos ──────────
+# --- Commands ---
 @bot.command()
 async def ask(ctx, *, pergunta: str):
-    if not autorizado(ctx):
-        return await ctx.send("❌ Não autorizado.")
-    chat = conversas[ctx.channel.id]
-    chat.append({"role": "user", "content": pergunta})
+    if not autorizado(ctx) or not groq_client:
+        return await ctx.send("❌ Não autorizado ou serviço indisponível.")
+    hist_chan = conversas[ctx.channel.id]
+    hist_chan.append({"role":"user","content":pergunta})
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=list(chat),
+        messages=list(hist_chan),
         temperature=0.7
     ).choices[0].message.content
-    chat.append({"role": "assistant", "content": resp})
+    hist_chan.append({"role":"assistant","content":resp})
     await ctx.send(resp)
 
 @bot.command()
 async def search(ctx, *, consulta: str):
     if not autorizado(ctx) or not SERPAPI_KEY:
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
-    await ctx.send(f"🔍 Pesquisando: {consulta}")
-    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
+    await ctx.send(f"🔍 Buscando: {consulta}")
+    results = GoogleSearch({"q":consulta,"hl":"pt-br","gl":"br","api_key":SERPAPI_KEY}).get_dict().get("organic_results",[])[:3]
     snippet = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
     resumo = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
@@ -169,16 +178,16 @@ async def testar_conteudo(ctx):
         return await ctx.send("❌ Não autorizado.")
     await ctx.send(await gerar_conteudo_com_ia())
 
-# ────────── Keep‑alive Flask ─────────
+# --- Keep-alive Flask ---
 app = Flask(__name__)
 @app.route("/")
 def home():
     return f"Bot {bot.user.name if bot.user else ''} online!"
 
 def run_server():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)), use_reloader=False)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)), use_reloader=False)
 
-# ─────────── Main ────────────
+# --- Main ---
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
         print("ERRO: DISCORD_TOKEN não definido.")
