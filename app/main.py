@@ -75,10 +75,25 @@ def carregar_historico():
 
 def salvar_historico(hist: dict):
     try:
+        # Mescla com arquivo local atual (caso conteúdo manual tenha sido inserido)
+        if os.path.exists(LOCAL_HISTORY):
+            try:
+                with open(LOCAL_HISTORY, "r", encoding="utf-8") as f:
+                    current = json.load(f)
+            except Exception:
+                current = {"palavras": [], "frases": []}
+            for k in ("palavras", "frases"):
+                # Usa set para deduplicar (case‑insensitive)
+                existing = {x.lower(): x for x in current.get(k, [])}
+                incoming = {x.lower(): x for x in hist.get(k, [])}
+                merged = list({**existing, **incoming}.values())
+                hist[k] = merged
+        # Escreve local
         with open(LOCAL_HISTORY, "w", encoding="utf-8") as f:
             json.dump(hist, f, ensure_ascii=False, indent=2)
-        from github_uploader import upload_to_github  # provided in repo
-        upload_to_github()  # síncrono
+        # Upload
+        from github_uploader import upload_to_github
+        upload_to_github()
     except Exception:
         traceback.print_exc()
 
@@ -88,8 +103,17 @@ async def gerar_conteudo_com_ia() -> str:
         return "⚠️ Groq não configurado."
 
     hist = carregar_historico()
-    prompt = (
-        """Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).
+    prompt = """
+Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).
+Depois, forneça uma frase estoica em português acompanhada de explicação.
+Use exatamente este formato, uma linha por item, sem títulos extras:
+Palavra: <palavra>
+Definição: <definição em português>
+Exemplo: <exemplo em inglês>
+Tradução do exemplo: <tradução em português>
+Frase estoica: <frase em português>
+Explicação: <explicação em português>
+""".
 "
         "Depois, forneça uma frase estoica em português acompanhada de explicação.
 "
