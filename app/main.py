@@ -82,7 +82,10 @@ async def salvar_historico(hist):
         with open(LOCAL_HISTORY, 'w', encoding='utf-8') as f:
             json.dump(hist, f, ensure_ascii=False, indent=2)
         from github_uploader import upload_to_github
-        await upload_to_github()
+        # upload_to_github may be synchronous, call without await
+        upload_to_github()
+    except Exception:
+        traceback.print_exc()
     except Exception:
         traceback.print_exc()
 
