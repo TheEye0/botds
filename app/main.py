@@ -103,8 +103,20 @@ async def gerar_conteudo_com_ia() -> str:
         return "⚠️ Groq não configurado."
 
     hist = carregar_historico()
-    prompt = """
+    prompt = (
+    """
 Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).
+Depois, forneça uma frase estoica em português acompanhada de explicação.
+Use exatamente este formato, uma linha por item, sem títulos extras:
+Palavra: <palavra>
+Definição: <definição em português>
+Exemplo: <exemplo em inglês>
+Tradução do exemplo: <tradução em português>
+Frase estoica: <frase em português>
+Explicação: <explicação em português>
+"""
+)
+.
 Depois, forneça uma frase estoica em português acompanhada de explicação.
 Use exatamente este formato, uma linha por item, sem títulos extras:
 Palavra: <palavra>
