@@ -1,18 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integrado com Groq + SerpApi e persistência de histórico (palavras / frases estoicas) em um arquivo
-`historico.json` hospedado no próprio repositório GitHub.
-
-🔧 PRINCIPAIS CORREÇÕES
-• Removido comando **!img** e restante de imports não usados.
-• `send_long_message` convertido para utilitário síncrono simples (evita duplicação).  
-• Eliminada a dupla declaração `@bot.command()` em **!testar_conteudo** e a linha solta que executava
-`gerar_conteudo_com_ia()` na importação, causando segunda mensagem.  
-• `salvar_historico()` chama `upload_to_github()` sem `await` (função síncrona).  
-• `carregar_historico()` lê do GitHub **e** faz fallback para o cache local em
-`LOCAL_HISTORY`.  
-• Loop diário usa `ctx.send` direto (não “longo”) — só uma mensagem.
+Integrado com Groq + SerpApi e persistência de histórico (palavras / frases estoicas)
+em `historico.json` no repositório GitHub.
 """
 import os, json, datetime, traceback, base64, requests
 from collections import defaultdict, deque
@@ -51,8 +41,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_HISTORY = os.path.join(BASE_DIR, HIST_FILE_PATH)
 
 def autorizado(ctx):
-    return isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER or \
-           ctx.guild and ctx.guild.id == ALLOWED_GUILD
+    return (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER) or \
+           (ctx.guild and ctx.guild.id == ALLOWED_GUILD)
 
 def carregar_historico():
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HIST_FILE_PATH}"
@@ -66,34 +56,18 @@ def carregar_historico():
             return json.loads(raw)
     except Exception:
         traceback.print_exc()
-    try:
-        with open(LOCAL_HISTORY, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError:
-        return {"palavras": [], "frases": []}
-
+    # Fallback local
+    if os.path.exists(LOCAL_HISTORY):
+        with open(LOCAL_HISTORY, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"palavras": [], "frases": []}
 
 def salvar_historico(hist: dict):
     try:
-        # Mescla com arquivo local atual (caso conteúdo manual tenha sido inserido)
-        if os.path.exists(LOCAL_HISTORY):
-            try:
-                with open(LOCAL_HISTORY, "r", encoding="utf-8") as f:
-                    current = json.load(f)
-            except Exception:
-                current = {"palavras": [], "frases": []}
-            for k in ("palavras", "frases"):
-                # Usa set para deduplicar (case‑insensitive)
-                existing = {x.lower(): x for x in current.get(k, [])}
-                incoming = {x.lower(): x for x in hist.get(k, [])}
-                merged = list({**existing, **incoming}.values())
-                hist[k] = merged
-        # Escreve local
         with open(LOCAL_HISTORY, "w", encoding="utf-8") as f:
             json.dump(hist, f, ensure_ascii=False, indent=2)
-        # Upload
         from github_uploader import upload_to_github
-        upload_to_github()
+        upload_to_github()  # síncrono
     except Exception:
         traceback.print_exc()
 
@@ -104,44 +78,15 @@ async def gerar_conteudo_com_ia() -> str:
 
     hist = carregar_historico()
     prompt = (
-    """
-Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).
-Depois, forneça uma frase estoica em português acompanhada de explicação.
-Use exatamente este formato, uma linha por item, sem títulos extras:
-Palavra: <palavra>
-Definição: <definição em português>
-Exemplo: <exemplo em inglês>
-Tradução do exemplo: <tradução em português>
-Frase estoica: <frase em português>
-Explicação: <explicação em português>
-"""
-)
-.
-Depois, forneça uma frase estoica em português acompanhada de explicação.
-Use exatamente este formato, uma linha por item, sem títulos extras:
-Palavra: <palavra>
-Definição: <definição em português>
-Exemplo: <exemplo em inglês>
-Tradução do exemplo: <tradução em português>
-Frase estoica: <frase em português>
-Explicação: <explicação em português>
-""".
-"
-        "Depois, forneça uma frase estoica em português acompanhada de explicação.
-"
-        "Use exatamente este formato, **uma informação por linha** e sem títulos extras:
-"
-        "Palavra: <palavra>
-"
-        "Definição: <definição em português>
-"
-        "Exemplo: <exemplo em inglês>
-"
-        "Tradução do exemplo: <tradução em português>
-"
-        "Frase estoica: <frase em português>
-"
-        "Explicação: <explicação em português>"""
+        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
+        "Depois, forneça uma frase estoica em português acompanhada de explicação.\n"
+        "Use exatamente este formato, uma linha por item, sem títulos extras:\n"
+        "Palavra: <palavra>\n"
+        "Definição: <definição em português>\n"
+        "Exemplo: <exemplo em inglês>\n"
+        "Tradução do exemplo: <tradução em português>\n"
+        "Frase estoica: <frase em português>\n"
+        "Explicação: <explicação em português>"
     )
 
     raw = groq_client.chat.completions.create(
@@ -153,15 +98,14 @@ Explicação: <explicação em português>
         temperature=0.7
     ).choices[0].message.content.strip()
 
-    # — PÓS-PROCESSAMENTO — se o modelo repetir o bloco, corta a partir da 2ª ocorrência
-    first_idx = raw.lower().find("palavra:")
-    second_idx = raw.lower().find("palavra:", first_idx + 1)
-    if second_idx != -1:
-        raw = raw[:second_idx].strip()
+    # —— remove duplicação se houver ——
+    first = raw.lower().find("palavra:")
+    second = raw.lower().find("palavra:", first + 1)
+    if second != -1:
+        raw = raw[:second].strip()
 
-    # Atualiza histórico somente se inédito
-    palavra = next((l.split(":", 1)[1].strip() for l in raw.splitlines() if l.lower().startswith("palavra:")), None)
-    frase   = next((l.split(":", 1)[1].strip() for l in raw.splitlines() if l.lower().startswith("frase estoica:")), None)
+    palavra = next((l.split(":",1)[1].strip() for l in raw.splitlines() if l.lower().startswith("palavra:")), None)
+    frase   = next((l.split(":",1)[1].strip() for l in raw.splitlines() if l.lower().startswith("frase estoica:")), None)
 
     updated = False
     if palavra and palavra.lower() not in [p.lower() for p in hist["palavras"]]:
@@ -170,7 +114,6 @@ Explicação: <explicação em português>
     if frase and frase.lower() not in [f.lower() for f in hist["frases"]]:
         hist["frases"].append(frase)
         updated = True
-
     if updated:
         salvar_historico(hist)
 
