@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra Groq + SerpApi e persiste histórico local em historico.json (com upload opcional ao GitHub).
+Integra Groq + SerpApi e persiste histórico local em historico.json com upload via github_uploader.
 """
 import os
 import json
 import datetime
 import traceback
-import base64
-import requests
 from collections import defaultdict, deque
 from threading import Thread
 
@@ -18,6 +16,9 @@ from flask import Flask
 from dotenv import load_dotenv
 from groq import Groq
 from serpapi import GoogleSearch
+
+# Importa uploader do GitHub
+from app.github_uploader import upload_to_github
 
 # --- Environment ---
 load_dotenv()
@@ -29,17 +30,11 @@ ALLOWED_USER    = int(os.getenv("ALLOWED_USER_ID", "0"))
 DEST_CHANNEL    = int(os.getenv("CANAL_DESTINO_ID", "0"))
 LLAMA_MODEL     = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
-# GitHub upload optional
-GITHUB_TOKEN    = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO     = os.getenv("GITHUB_REPO")
-
-# Local history path
+# Caminho local para historico.json
 HISTORY_FILE    = os.path.join(
     os.path.dirname(__file__),
     os.getenv("HISTORICO_FILE_PATH", "historico.json")
 )
-# Path for GitHub API
-HIST_FILE_PATH  = os.getenv("HISTORICO_FILE_PATH", "historico.json")
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
@@ -56,56 +51,33 @@ def autorizado(ctx):
         (ctx.guild and ctx.guild.id == ALLOWED_GUILD)
     )
 
-# --- Histórico via GitHub API ---
+# --- Histórico local e upload via GitHub ---
 def carregar_historico():
-    """
-    Faz GET no GitHub Contents API e retorna (histórico dict, sha string).
-    Se o arquivo não existir, retorna estruturas vazias e sha None.
-    """
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HIST_FILE_PATH}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.ok:
-            data = resp.json()
-            raw = base64.b64decode(data.get("content", ""))
-            hist = json.loads(raw)
-            sha = data.get("sha")
-            return hist, sha
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"palavras": [], "frases": []}
     except Exception:
         traceback.print_exc()
-    return {"palavras": [], "frases": []}, None
+        return {"palavras": [], "frases": []}
 
 
-def salvar_historico(hist: dict, sha: str = None):
-    """
-    Faz PUT no GitHub Contents API para atualizar historico.json com novo conteúdo.
-    Usa sha para sobrescrever a versão correta.
-    """
+def salvar_historico(hist: dict):
     try:
-        content_b64 = base64.b64encode(
-            json.dumps(hist, ensure_ascii=False).encode()
-        ).decode()
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HIST_FILE_PATH}"
-        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-        payload = {
-            "message": "Atualiza historico.json pelo bot",
-            "content": content_b64,
-            "branch": "main"
-        }
-        if sha:
-            payload["sha"] = sha
-        put_resp = requests.put(url, headers=headers, json=payload, timeout=10)
-        put_resp.raise_for_status()
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(hist, f, ensure_ascii=False, indent=2)
     except Exception:
         traceback.print_exc()
+    # Chama uploader para gravar no GitHub
+    upload_to_github()
 
-# --- Generate daily content ---
+# --- Geração de conteúdo diário ---
 async def gerar_conteudo_com_ia() -> str:
     if not groq_client:
         return "⚠️ Serviço de geração indisponível."
 
-    hist, sha = carregar_historico()
+    hist = carregar_historico()
     prompt = (
         "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução)." +
         "Depois, forneça uma frase estoica em português com explicação.\n" +
@@ -126,12 +98,14 @@ async def gerar_conteudo_com_ia() -> str:
         temperature=0.7
     ).choices[0].message.content.strip()
 
+    # Remove possíveis blocos repetidos
     lower = resp.lower()
     first = lower.find("palavra:")
     second = lower.find("palavra:", first + 1)
     if second != -1:
         resp = resp[:second].strip()
 
+    # Extrai palavra e frase
     palavra = None
     frase = None
     for line in resp.splitlines():
@@ -148,11 +122,11 @@ async def gerar_conteudo_com_ia() -> str:
         hist.setdefault("frases", []).append(frase)
         updated = True
     if updated:
-        salvar_historico(hist, sha)
+        salvar_historico(hist)
 
     return resp
 
-# --- Daily loop ---
+# --- Loop diário ---
 @tasks.loop(minutes=1)
 async def enviar_conteudo_diario():
     now = datetime.datetime.now()
@@ -161,35 +135,32 @@ async def enviar_conteudo_diario():
         if chan:
             await chan.send(await gerar_conteudo_com_ia())
 
-# --- Events ---
+# --- Eventos ---
 @bot.event
 async def on_ready():
     print(f"✅ Bot online: {bot.user} | Guilds: {len(bot.guilds)}")
     enviar_conteudo_diario.start()
 
-# --- Commands ---
+# --- Comandos ---
 @bot.command()
 async def ask(ctx, *, pergunta: str):
     if not autorizado(ctx) or not groq_client:
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
-    # 1) Adiciona a pergunta ao histórico
+
+    # Histórico de conversas
     hist_chan = conversas[ctx.channel.id]
     hist_chan.append({"role": "user", "content": pergunta})
 
-    # 2) Constrói o prompt com contexto
+    # Constrói prompt com contexto
     mensagens = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
-
-    # 3) Chama a API com histórico
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=mensagens,
         temperature=0.7
     ).choices[0].message.content
 
-    # 4) Adiciona a resposta ao histórico
+    # Adiciona resposta ao histórico
     hist_chan.append({"role": "assistant", "content": resp})
-
-    # 5) Envia a resposta
     await ctx.send(resp)
 
 @bot.command()
