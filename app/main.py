@@ -90,24 +90,42 @@ def fetch_history():
 
 
 def push_history(hist, sha=None):
+    """
+    Atualiza o histórico no GitHub se houver mudanças. Em caso de conflito, tenta refetch e reenviar.
+    """
+    # Verifica conteúdo atual para evitar PUT desnecessário
     try:
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
-        content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False, indent=2).encode()).decode()
-        payload = {"message": "Atualiza histórico pelo bot", "content": content_b64, "branch": "main"}
-        if sha:
-            payload["sha"] = sha
+        current, current_sha = fetch_history()
+        if current == hist:
+            print(f"[HIST] Sem mudanças para enviar (sha={current_sha}).")
+            return current_sha
+    except Exception:
+        traceback.print_exc()
+    # Prepara payload
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
+    content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False, indent=2).encode()).decode()
+    payload = {"message": "Atualiza histórico pelo bot", "content": content_b64, "branch": "main"}
+    if sha:
+        payload["sha"] = sha
+    # Tenta enviar
+    try:
         r = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=10)
         if r.status_code == 409:
+            # SHA mudou no repositório, refetch e reenviar
             _, new_sha = fetch_history()
             if new_sha and new_sha != sha:
                 payload["sha"] = new_sha
                 r = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=10)
         print(f"[HIST PUT] status={r.status_code} text={r.text}")
         r.raise_for_status()
+        # Atualiza sha retornado
+        data = r.json()
+        return data.get("content", {}).get("sha")
     except Exception:
         traceback.print_exc()
+        return None
 
-# --- Prompt & Parsing ---
+# --- Prompt & Parsing --- & Parsing ---
 def build_prompt(palavras, frases):
     hist_text = ""
     if palavras:
