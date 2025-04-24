@@ -40,12 +40,13 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"Bot online!")
-# start server
+
 Thread(target=lambda: HTTPServer(("0.0.0.0", PORT), KeepAliveHandler).serve_forever(), daemon=True).start()
 
 # --- Discord Setup ---
@@ -58,12 +59,16 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # --- Helpers ---
 def autorizado(ctx):
-    return ((isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
-            or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID))
+    return (
+        (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
+        or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
+    )
 
 async def safe_send(channel, content):
     last = None
-    async for msg in channel.history(limit=1): last = msg; break
+    async for msg in channel.history(limit=1):
+        last = msg
+        break
     if last and last.author.id == bot.user.id and last.content == content:
         return
     await channel.send(content)
@@ -83,13 +88,20 @@ def fetch_history():
         traceback.print_exc()
     return {"palavras": [], "frases": []}, None
 
+
 def push_history(hist, sha=None):
     try:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
         content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False, indent=2).encode()).decode()
         payload = {"message": "Atualiza histórico pelo bot", "content": content_b64, "branch": "main"}
-        if sha: payload["sha"] = sha
+        if sha:
+            payload["sha"] = sha
         r = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=10)
+        if r.status_code == 409:
+            _, new_sha = fetch_history()
+            if new_sha and new_sha != sha:
+                payload["sha"] = new_sha
+                r = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=10)
         print(f"[HIST PUT] status={r.status_code} text={r.text}")
         r.raise_for_status()
     except Exception:
@@ -98,12 +110,14 @@ def push_history(hist, sha=None):
 # --- Prompt & Parsing ---
 def build_prompt(palavras, frases):
     hist_text = ""
-    if palavras: hist_text += "Palavras já usadas: " + ", ".join(palavras) + ".\n"
-    if frases:  hist_text += "Frases já usadas: "  + ", ".join(frases)  + ".\n"
+    if palavras:
+        hist_text += "Palavras já usadas: " + ", ".join(palavras) + ".\n"
+    if frases:
+        hist_text += "Frases já usadas: " + ", ".join(frases) + ".\n"
     hist_text += (
         "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, "
         "sem repetir nenhuma usada; as palavras não precisam ser da área do estoicismo.\n"
-        "Use formato (uma linha por campo, espaços entre pares, negrito no campo, texto normal na resposta):\n"
+        "Use formato (linha por campo, espaços entre pares, campo em negrito, texto normal na resposta):\n"
         "**Palavra**: <palavra>\n"
         "**Definição**: <definição em português>\n"
         "**Exemplo**: <exemplo em inglês>\n"
@@ -113,71 +127,101 @@ def build_prompt(palavras, frases):
     )
     return hist_text
 
+
 def parse_block(raw):
     m = re.search(r'(?im)^Palavra:.*?Explicação:.*?(?=^Palavra:|\Z)', raw, re.DOTALL)
     return m.group(0).strip() if m else raw.strip()
 
 # --- Generation & Update ---
 async def generate_and_update():
-    if not groq_client: return "⚠️ Serviço indisponível."
     hist, sha = fetch_history()
     prompt = build_prompt(hist.get("palavras", []), hist.get("frases", []))
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=[{"role":"system","content":"Você é um professor de inglês e estoico."},
-                  {"role":"user","content":prompt}],
+        messages=[
+            {"role": "system", "content": "Você é um professor de inglês e estoico."},
+            {"role": "user", "content": prompt}
+        ],
         temperature=0.7
     ).choices[0].message.content
     block = parse_block(resp)
-    p = re.search(r'(?im)^Palavra: *(.*)', block)
-    f = re.search(r'(?im)^Frase estoica: *(.*)', block)
-    if p: hist["palavras"].append(p.group(1).strip())
-    if f: hist["frases"].append(f.group(1).strip())
+    pw = re.search(r'(?im)^Palavra: *(.*)', block)
+    fr = re.search(r'(?im)^Frase estoica: *(.*)', block)
+    if pw:
+        p = pw.group(1).strip()
+        if p.lower() not in [x.lower() for x in hist["palavras"]]:
+            hist["palavras"].append(p)
+    if fr:
+        f = fr.group(1).strip()
+        if f.lower() not in [x.lower() for x in hist["frases"]]:
+            hist["frases"].append(f)
     push_history(hist, sha)
     return block
 
 # --- Chunking & Send ---
-def chunk_text(text, limit=1900): return [text[i:i+limit] for i in range(0,len(text),limit)]
+def chunk_text(txt, limit=1900):
+    return [txt[i:i+limit] for i in range(0, len(txt), limit)]
+
 async def send_content(chan):
     content = await generate_and_update()
-    for piece in chunk_text(content): await safe_send(chan, piece)
+    for segment in chunk_text(content):
+        await safe_send(chan, segment)
 
 # --- Commands ---
 @bot.command()
 async def ask(ctx, *, pergunta: str):
-    if not autorizado(ctx) or not groq_client: return await ctx.send("❌ Não autorizado.")
-    h = conversas[ctx.channel.id]; h.append({"role":"user","content":pergunta})
-    msgs=[{"role":"system","content":"Você é um assistente prestativo."}]+list(h)
-    resp=groq_client.chat.completions.create(model=LLAMA_MODEL,messages=msgs,temperature=0.7).choices[0].message.content
-    h.append({"role":"assistant","content":resp})
-    for piece in chunk_text(resp): await safe_send(ctx.channel,piece)
+    if not autorizado(ctx) or not groq_client:
+        return await ctx.send("❌ Não autorizado.")
+    h = conversas[ctx.channel.id]
+    h.append({"role": "user", "content": pergunta})
+    msgs = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(h)
+    out = groq_client.chat.completions.create(
+        model=LLAMA_MODEL,
+        messages=msgs,
+        temperature=0.7
+    ).choices[0].message.content
+    h.append({"role": "assistant", "content": out})
+    for seg in chunk_text(out):
+        await safe_send(ctx.channel, seg)
 
 @bot.command()
 async def search(ctx, *, consulta: str):
-    if not autorizado(ctx) or not SERPAPI_KEY: return await ctx.send("❌ Não autorizado.")
-    await safe_send(ctx.channel,f"🔍 Buscando: {consulta}")
-    res=GoogleSearch({"q":consulta,"hl":"pt-br","gl":"br","api_key":SERPAPI_KEY}).get_dict().get("organic_results",[])[:3]
-    snip="\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in res) or "Nenhum resultado."
-    resumo=groq_client.chat.completions.create(model=LLAMA_MODEL,messages=[{"role":"system","content":"Resuma resultados."},{"role":"user","content":snip}],temperature=0.3).choices[0].message.content
-    for piece in chunk_text(resumo): await safe_send(ctx.channel,piece)
+    if not autorizado(ctx) or not SERPAPI_KEY:
+        return await ctx.send("❌ Não autorizado.")
+    await safe_send(ctx.channel, f"🔍 Buscando: {consulta}")
+    items = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
+    snippet = "\n\n".join(f"**{i['title']}**: {i['snippet']}" for i in items) or "Nenhum resultado."
+    sumr = groq_client.chat.completions.create(
+        model=LLAMA_MODEL,
+        messages=[
+            {"role": "system", "content": "Resuma resultados."},
+            {"role": "user", "content": snippet}
+        ],
+        temperature=0.3
+    ).choices[0].message.content
+    for seg in chunk_text(sumr):
+        await safe_send(ctx.channel, seg)
 
 @bot.command()
 async def testar_conteudo(ctx):
-    if not autorizado(ctx): return await ctx.send("❌ Não autorizado.")
+    if not autorizado(ctx):
+        return await ctx.send("❌ Não autorizado.")
     await send_content(ctx.channel)
 
 # --- Scheduled ---
-@tasks.loop(time=_time(hour=9,minute=0))
+@tasks.loop(time=_time(hour=9, minute=0))
 async def daily_send():
-    ch=bot.get_channel(DEST_CHANNEL_ID)
-    if ch: await send_content(ch)
+    ch = bot.get_channel(DEST_CHANNEL_ID)
+    if ch:
+        await send_content(ch)
 
 # --- Events ---
 @bot.event
 async def on_ready():
-    import os,threading
+    import os, threading
     print(f"[READY] PID={os.getpid()} TID={threading.get_ident()} — Bot online: {bot.user}")
     daily_send.start()
 
 # --- Main ---
-if __name__=="__main__": bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
