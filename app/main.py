@@ -2,6 +2,7 @@
 """
 main.py — BotDS Discord Bot
 Integra Groq + SerpApi, persiste histórico via GitHub API, com comandos ask, search, testar_conteudo e keep-alive HTTP.
+Implementa detecção de duplicação via leitura do histórico de canal e logs de envio de histórico.
 """
 import os
 import json
@@ -47,7 +48,6 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot online!")
 
-# Start HTTP server in background
 Thread(target=lambda: HTTPServer(("0.0.0.0", PORT), KeepAliveHandler).serve_forever(), daemon=True).start()
 
 # --- Discord Setup ---
@@ -64,6 +64,16 @@ def autorizado(ctx):
         (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID) or
         (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
     )
+
+async def safe_send(channel, content):
+    """Envia content somente se for diferente da última mensagem do bot no canal."""
+    last = None
+    async for msg in channel.history(limit=1):
+        last = msg
+        break
+    if last and last.author.id == bot.user.id and last.content == content:
+        return
+    await channel.send(content)
 
 # --- GitHub History Persistence ---
 GITHUB_API_HEADERS = {
@@ -92,6 +102,7 @@ def push_history(hist, sha=None):
         payload["sha"] = sha
     try:
         r = requests.put(url, headers=GITHUB_API_HEADERS, json=payload, timeout=10)
+        print(f"[HIST PUT] status={r.status_code} text={r.text}")
         r.raise_for_status()
     except Exception:
         traceback.print_exc()
@@ -103,7 +114,6 @@ def build_prompt(used_palavras, used_frases):
         hist_text += "Palavras já usadas: " + ", ".join(used_palavras) + ".\n"
     if used_frases:
         hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".\n"
-    # Custom user prompt
     hist_text += (
         "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, "
         "sem repetir nenhuma das já usadas; as palavras não precisam ser da área do estoicismo, podem ser qualquer palavra.\n"
@@ -113,7 +123,7 @@ def build_prompt(used_palavras, used_frases):
         "**Exemplo**: <exemplo em inglês>\n"
         "**Tradução do exemplo**: <tradução em português>\n"
         "**Frase estoica**: <frase em português>\n"
-        "**Explicação**: <explicação em português>\n"
+        "**Explicação**: <explicação em português>"
     )
     return hist_text
 
@@ -130,32 +140,25 @@ async def generate_and_update():
     prompt = build_prompt(hist.get("palavras", []), hist.get("frases", []))
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=[{"role":"system","content":"Você é um professor de inglês e estoico."},
-                  {"role":"user","content": prompt}],
+        messages=[
+            {"role":"system","content":"Você é um professor de inglês e estoico."},
+            {"role":"user","content": prompt}
+        ],
         temperature=0.7
     ).choices[0].message.content
     block = parse_block(resp)
     pal = re.search(r'(?im)^Palavra: *(.*)', block)
     fra = re.search(r'(?im)^Frase estoica: *(.*)', block)
-    updated = False
     if pal:
         p = pal.group(1).strip()
         if p.lower() not in [x.lower() for x in hist["palavras"]]:
             hist["palavras"].append(p)
-            updated = True
     if fra:
         f = fra.group(1).strip()
         if f.lower() not in [x.lower() for x in hist["frases"]]:
             hist["frases"].append(f)
-            updated = True
-    if updated:
-        push_history(hist, sha)
+    push_history(hist, sha)
     return block
-
-# --- Unified Send ---
-async def send_content(channel):
-    content = await generate_and_update()
-    await channel.send(content)
 
 # --- Helper for chunking messages ---
 def chunk_text(text: str, limit: int = 1900):
@@ -176,7 +179,7 @@ async def ask(ctx, *, pergunta: str):
     ).choices[0].message.content
     hist_chan.append({"role": "assistant", "content": resp})
     for chunk in chunk_text(resp):
-        await ctx.send(chunk)
+        await safe_send(ctx.channel, chunk)
 
 @bot.command()
 async def search(ctx, *, consulta: str):
@@ -191,7 +194,7 @@ async def search(ctx, *, consulta: str):
         temperature=0.3
     ).choices[0].message.content
     for chunk in chunk_text(resumo):
-        await ctx.send(chunk)
+        await safe_send(ctx.channel, chunk)
 
 @bot.command()
 async def testar_conteudo(ctx):
@@ -210,7 +213,8 @@ async def daily_send():
 # --- Events ---
 @bot.event
 async def on_ready():
-    print(f"✅ Online: {bot.user} | Guilds: {len(bot.guilds)}")
+    import os, threading
+    print(f"[READY] PID={os.getpid()} TID={threading.get_ident()} — Bot online: {bot.user} | Guilds: {len(bot.guilds)}")
     daily_send.start()
 
 # --- Main ---
