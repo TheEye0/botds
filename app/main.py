@@ -164,6 +164,15 @@ async def generate_and_update():
 def chunk_text(text: str, limit: int = 1900):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
+# --- Unified Send ---
+async def send_content(channel):
+    """Gera conteúdo e envia com safe_send para evitar duplicações."""
+    content = await generate_and_update()
+    await safe_send(channel, content)
+
+# --- Commands ---(text: str, limit: int = 1900):
+    return [text[i:i+limit] for i in range(0, len(text), limit)]
+
 # --- Commands ---
 @bot.command()
 async def ask(ctx, *, pergunta: str):
