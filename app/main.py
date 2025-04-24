@@ -7,10 +7,10 @@ import os
 import json
 import traceback
 import re
-from datetime import time as _time
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections import defaultdict, deque
+from datetime import time as _time
 
 import base64
 import requests
@@ -47,7 +47,7 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot online!")
 
-# Start HTTP server
+# Start HTTP server in background
 Thread(target=lambda: HTTPServer(("0.0.0.0", PORT), KeepAliveHandler).serve_forever(), daemon=True).start()
 
 # --- Discord Setup ---
@@ -103,17 +103,17 @@ def build_prompt(used_palavras, used_frases):
         hist_text += "Palavras já usadas: " + ", ".join(used_palavras) + ".\n"
     if used_frases:
         hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".\n"
-    # Prompt customizado pelo usuário
+    # Custom user prompt
     hist_text += (
         "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, "
         "sem repetir nenhuma das já usadas; as palavras não precisam ser da área do estoicismo, podem ser qualquer palavra.\n"
-        "Use este formato (uma linha por item, mas dando espaço entre elas e colocando o campo de cada uma em negrito e a resposta em texto normal):\n"
+        "Use este formato (uma linha por item, dando espaço entre elas e colocando o campo de cada uma em negrito e a resposta em texto normal):\n"
         "**Palavra**: <palavra>\n"
         "**Definição**: <definição em português>\n"
         "**Exemplo**: <exemplo em inglês>\n"
         "**Tradução do exemplo**: <tradução em português>\n"
         "**Frase estoica**: <frase em português>\n"
-        "**Explicação**: <explicação em português>"
+        "**Explicação**: <explicação em português>\n"
     )
     return hist_text
 
