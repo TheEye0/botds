@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra Groq + SerpApi, persiste histórico via GitHub API,
-comandos ask, search, testar_conteudo e keep-alive HTTP.
+Versão funcional recuperada: integra Groq + SerpApi, persiste histórico via GitHub API,
+comandos ask, search, testar_conteudo, e keep-alive HTTP sem lógicas de duplicação avançadas.
 """
 import os
 import json
 import traceback
 import re
+import base64
+import requests
+import discord
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections import defaultdict, deque
 from datetime import time as _time
-import base64
-import requests
-import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from groq import Groq
@@ -34,19 +34,17 @@ DEST_CHANNEL_ID  = int(os.getenv("CANAL_DESTINO_ID", "0"))
 LLAMA_MODEL      = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 PORT             = int(os.getenv("PORT", "10000"))
 
-# --- Keep-alive HTTP Server ---
+# --- HTTP Keep-alive ---
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"Bot online!")
-
 Thread(target=lambda: HTTPServer(("0.0.0.0", PORT), KeepAliveHandler).serve_forever(), daemon=True).start()
 
 # --- Discord Setup ---
@@ -54,34 +52,24 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 conversas = defaultdict(lambda: deque(maxlen=10))
-
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # --- Helpers ---
 def autorizado(ctx):
-    return (
-        (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
-        or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
-    )
+    return ((isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
+            or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID))
 
-async def safe_send(channel, content):
-    last = None
-    async for msg in channel.history(limit=1):
-        last = msg
-        break
-    if last and last.author.id == bot.user.id and last.content == content:
-        return
-    await channel.send(content)
-
-# --- GitHub History Persistence ---
+# --- GitHub Persistence ---
 GITHUB_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
 def fetch_history():
     try:
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
-        r = requests.get(url, headers=GITHUB_HEADERS, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
+        resp = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}",
+            headers=GITHUB_HEADERS, timeout=10
+        )
+        if resp.ok:
+            data = resp.json()
             raw = base64.b64decode(data.get("content", ""))
             return json.loads(raw), data.get("sha")
     except Exception:
@@ -90,70 +78,31 @@ def fetch_history():
 
 
 def push_history(hist, sha=None):
-    """
-    Atualiza o histórico no GitHub se houver mudanças. Em caso de conflito, tenta refetch e reenviar.
-    """
-    # Verifica conteúdo atual para evitar PUT desnecessário
     try:
-        current, current_sha = fetch_history()
-        if current == hist:
-            print(f"[HIST] Sem mudanças para enviar (sha={current_sha}).")
-            return current_sha
+        content_b64 = base64.b64encode(
+            json.dumps(hist, ensure_ascii=False).encode()
+        ).decode()
+        payload = {"message": "Atualiza historico.json pelo bot", "content": content_b64, "branch": "main"}
+        if sha:
+            payload["sha"] = sha
+        put_resp = requests.put(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}",
+            headers=GITHUB_HEADERS, json=payload, timeout=10
+        )
+        put_resp.raise_for_status()
     except Exception:
         traceback.print_exc()
-    # Prepara payload
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
-    content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False, indent=2).encode()).decode()
-    payload = {"message": "Atualiza histórico pelo bot", "content": content_b64, "branch": "main"}
-    if sha:
-        payload["sha"] = sha
-    # Tenta enviar
-    try:
-        r = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=10)
-        if r.status_code == 409:
-            # SHA mudou no repositório, refetch e reenviar
-            _, new_sha = fetch_history()
-            if new_sha and new_sha != sha:
-                payload["sha"] = new_sha
-                r = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=10)
-        print(f"[HIST PUT] status={r.status_code} text={r.text}")
-        r.raise_for_status()
-        # Atualiza sha retornado
-        data = r.json()
-        return data.get("content", {}).get("sha")
-    except Exception:
-        traceback.print_exc()
-        return None
 
-# --- Prompt & Parsing --- & Parsing ---
-def build_prompt(palavras, frases):
-    hist_text = ""
-    if palavras:
-        hist_text += "Palavras já usadas: " + ", ".join(palavras) + ".\n"
-    if frases:
-        hist_text += "Frases já usadas: " + ", ".join(frases) + ".\n"
-    hist_text += (
-        "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, "
-        "sem repetir nenhuma usada; as palavras não precisam ser da área do estoicismo.\n"
-        "Use formato (linha por campo, espaços entre pares, campo em negrito, texto normal na resposta):\n"
-        "**Palavra**: <palavra>\n"
-        "**Definição**: <definição em português>\n"
-        "**Exemplo**: <exemplo em inglês>\n"
-        "**Tradução**: <tradução em português>\n"
-        "**Frase estoica**: <frase em português>\n"
-        "**Explicação**: <explicação em português>"
-    )
-    return hist_text
-
-
-def parse_block(raw):
-    m = re.search(r'(?im)^Palavra:.*?Explicação:.*?(?=^Palavra:|\Z)', raw, re.DOTALL)
-    return m.group(0).strip() if m else raw.strip()
-
-# --- Generation & Update ---
-async def generate_and_update():
+# --- Content Generation ---
+async def gerar_conteudo_com_ia():
+    if not groq_client:
+        return "⚠️ Serviço indisponível."
     hist, sha = fetch_history()
-    prompt = build_prompt(hist.get("palavras", []), hist.get("frases", []))
+    prompt = (
+        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
+        "Depois, forneça uma frase estoica em português com explicação.\n"
+        "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
+    )
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[
@@ -161,55 +110,52 @@ async def generate_and_update():
             {"role": "user", "content": prompt}
         ],
         temperature=0.7
-    ).choices[0].message.content
-    block = parse_block(resp)
-    pw = re.search(r'(?im)^Palavra: *(.*)', block)
-    fr = re.search(r'(?im)^Frase estoica: *(.*)', block)
-    if pw:
-        p = pw.group(1).strip()
-        if p.lower() not in [x.lower() for x in hist["palavras"]]:
-            hist["palavras"].append(p)
-    if fr:
-        f = fr.group(1).strip()
-        if f.lower() not in [x.lower() for x in hist["frases"]]:
-            hist["frases"].append(f)
-    push_history(hist, sha)
+    ).choices[0].message.content.strip()
+    block = resp
+    # extrai palavra/frase
+    palavra = re.search(r'(?im)^Palavra: *(.+)$', block)
+    frase = re.search(r'(?im)^Frase estoica: *(.+)$', block)
+    updated = False
+    if palavra:
+        p = palavra.group(1).strip()
+        if p.lower() not in [x.lower() for x in hist.get("palavras", [])]:
+            hist.setdefault("palavras", []).append(p)
+            updated = True
+    if frase:
+        f = frase.group(1).strip()
+        if f.lower() not in [x.lower() for x in hist.get("frases", [])]:
+            hist.setdefault("frases", []).append(f)
+            updated = True
+    if updated:
+        push_history(hist, sha)
     return block
 
-# --- Chunking & Send ---
-def chunk_text(txt, limit=1900):
-    return [txt[i:i+limit] for i in range(0, len(txt), limit)]
-
-async def send_content(chan):
-    content = await generate_and_update()
-    for segment in chunk_text(content):
-        await safe_send(chan, segment)
+async def send_content(channel):
+    await channel.send(await gerar_conteudo_com_ia())
 
 # --- Commands ---
 @bot.command()
 async def ask(ctx, *, pergunta: str):
     if not autorizado(ctx) or not groq_client:
-        return await ctx.send("❌ Não autorizado.")
+        return await ctx.send("❌ Não autorizado ou serviço indisponível.")
     h = conversas[ctx.channel.id]
     h.append({"role": "user", "content": pergunta})
-    msgs = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(h)
-    out = groq_client.chat.completions.create(
+    resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=msgs,
+        messages=[{"role": "system", "content": "Você é um assistente prestativo."}] + list(h),
         temperature=0.7
     ).choices[0].message.content
-    h.append({"role": "assistant", "content": out})
-    for seg in chunk_text(out):
-        await safe_send(ctx.channel, seg)
+    h.append({"role": "assistant", "content": resp})
+    await ctx.send(resp)
 
 @bot.command()
 async def search(ctx, *, consulta: str):
     if not autorizado(ctx) or not SERPAPI_KEY:
-        return await ctx.send("❌ Não autorizado.")
-    await safe_send(ctx.channel, f"🔍 Buscando: {consulta}")
-    items = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
-    snippet = "\n\n".join(f"**{i['title']}**: {i['snippet']}" for i in items) or "Nenhum resultado."
-    sumr = groq_client.chat.completions.create(
+        return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
+    await ctx.send(f"🔍 Buscando: {consulta}")
+    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
+    snippet = "\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
+    resumo = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[
             {"role": "system", "content": "Resuma resultados."},
@@ -217,8 +163,7 @@ async def search(ctx, *, consulta: str):
         ],
         temperature=0.3
     ).choices[0].message.content
-    for seg in chunk_text(sumr):
-        await safe_send(ctx.channel, seg)
+    await ctx.send(resumo)
 
 @bot.command()
 async def testar_conteudo(ctx):
@@ -233,13 +178,10 @@ async def daily_send():
     if ch:
         await send_content(ch)
 
-# --- Events ---
 @bot.event
 async def on_ready():
-    import os, threading
-    print(f"[READY] PID={os.getpid()} TID={threading.get_ident()} — Bot online: {bot.user}")
+    print(f"✅ Bot online: {bot.user} | Guilds: {len(bot.guilds)}")
     daily_send.start()
 
-# --- Main ---
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
