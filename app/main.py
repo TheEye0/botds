@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra Groq + SerpApi e persiste histórico via GitHub API.
-Inclui servidor HTTP mínimo para keep-alive no Render.
+Integra Groq + SerpApi, persiste histórico via GitHub API, com comandos ask, search e keep-alive HTTP.
 """
 import os
 import json
@@ -11,6 +10,7 @@ import re
 from datetime import time as _time
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from collections import defaultdict, deque
 
 import base64
 import requests
@@ -53,6 +53,7 @@ Thread(target=start_keepalive_server, daemon=True).start()
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+conversas = defaultdict(lambda: deque(maxlen=10))
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -154,13 +155,48 @@ async def send_content(channel):
     content = await generate_and_update()
     await channel.send(content)
 
+# --- Helper for chunking messages ---
+def chunk_text(text: str, limit: int = 1900):
+    """Divide texto em pedaços menores que o limite."""
+    return [text[i:i+limit] for i in range(0, len(text), limit)]
+
 # --- Commands ---
 @bot.command()
-async def testar_conteudo(ctx):
-    """Envia conteúdo agora."""
-    if not autorizado(ctx):
-        return await ctx.send("❌ Não autorizado.")
-    await send_content(ctx.channel)
+async def ask(ctx, *, pergunta: str):
+    if not autorizado(ctx) or not groq_client:
+        return await ctx.send("❌ Não autorizado ou serviço indisponível.")
+    hist_chan = conversas[ctx.channel.id]
+    hist_chan.append({"role": "user", "content": pergunta})
+    messages = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
+    resp = groq_client.chat.completions.create(
+        model=LLAMA_MODEL,
+        messages=messages,
+        temperature=0.7
+    ).choices[0].message.content
+    hist_chan.append({"role": "assistant", "content": resp})
+    for chunk in chunk_text(resp):
+        await ctx.send(chunk)
+
+@bot.command()
+async def search(ctx, *, consulta: str):
+    if not autorizado(ctx) or not SERPAPI_KEY:
+        return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
+    await ctx.send(f"🔍 Buscando: {consulta}")
+    results = (
+        GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
+        .get_dict()
+        .get("organic_results", [])[:3]
+    )
+    snippet = "\n\n".join(
+        f"**{r['title']}**: {r['snippet']}" for r in results
+    ) or "Nenhum resultado."
+    resumo = groq_client.chat.completions.create(
+        model=LLAMA_MODEL,
+        messages=[{"role": "system", "content": "Resuma resultados."}, {"role": "user", "content": snippet}],
+        temperature=0.3
+    ).choices[0].message.content
+    for chunk in chunk_text(resumo):
+        await ctx.send(chunk)
 
 # --- Scheduled ---
 @tasks.loop(time=_time(hour=9, minute=0))
