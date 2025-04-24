@@ -2,12 +2,15 @@
 """
 main.py — BotDS Discord Bot
 Integra Groq + SerpApi e persiste histórico via GitHub API.
+Inclui servidor HTTP mínimo para keep-alive no Render.
 """
 import os
 import json
 import traceback
 import re
 from datetime import time as _time
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import base64
 import requests
@@ -29,6 +32,22 @@ ALLOWED_GUILD_ID = int(os.getenv("ALLOWED_GUILD_ID", "0"))
 ALLOWED_USER_ID  = int(os.getenv("ALLOWED_USER_ID", "0"))
 DEST_CHANNEL_ID  = int(os.getenv("CANAL_DESTINO_ID", "0"))
 LLAMA_MODEL      = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+PORT             = int(os.getenv("PORT", "10000"))
+
+# --- Keep-alive HTTP Server ---
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot online!")
+
+def start_keepalive_server():
+    server = HTTPServer(("0.0.0.0", PORT), KeepAliveHandler)
+    server.serve_forever()
+
+# Start the HTTP server in a background thread
+Thread(target=start_keepalive_server, daemon=True).start()
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -51,9 +70,6 @@ GITHUB_API_HEADERS = {
 }
 
 def fetch_history():
-    """
-    Busca o histórico no repositório GitHub e retorna (hist dict, sha).
-    """
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
     try:
         resp = requests.get(url, headers=GITHUB_API_HEADERS, timeout=10)
@@ -68,9 +84,6 @@ def fetch_history():
 
 
 def push_history(hist, sha=None):
-    """
-    Atualiza o histórico no GitHub usando PUT na Contents API.
-    """
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
     content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False).encode()).decode()
     payload = {"message": "Atualiza histórico pelo bot", "content": content_b64, "branch": "main"}
@@ -84,19 +97,14 @@ def push_history(hist, sha=None):
 
 # --- Prompt and Parsing ---
 def build_prompt(used_palavras, used_frases):
-    """
-    Constrói o prompt incluindo histórico para evitar repetições.
-    """
     hist_text = ""
     if used_palavras:
         hist_text += "Palavras já usadas: " + ", ".join(used_palavras) + ".\n"
     if used_frases:
         hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".\n"
-    hist_text += "Gere uma nova palavra e frase estoica, sem repetir as já usadas.\n"
     hist_text += (
-        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
-        "Depois, forneça uma frase estoica em português com explicação.\n"
-        "Use este formato exato (uma linha por item):\n"
+        "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, sem repetir nenhuma das já usadas.\n"
+        "Use este formato (uma linha por item):\n"
         "Palavra: <palavra>\n"
         "Definição: <definição em português>\n"
         "Exemplo: <exemplo em inglês>\n"
@@ -115,33 +123,28 @@ def parse_block(raw):
 async def generate_and_update():
     if not groq_client:
         return "⚠️ Serviço indisponível."
-    # Carrega histórico
     hist, sha = fetch_history()
-    # Constroi prompt com histórico
     prompt = build_prompt(hist.get("palavras", []), hist.get("frases", []))
-    # Chama IA
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[{"role":"system","content":"Você é um professor de inglês e estoico."},
                   {"role":"user","content":prompt}],
         temperature=0.7
     ).choices[0].message.content
-    # Extrai bloco e valores
     block = parse_block(resp)
     pal_match = re.search(r'(?im)^Palavra: *(.*)', block)
     fra_match = re.search(r'(?im)^Frase estoica: *(.*)', block)
     updated = False
     if pal_match:
         palavra = pal_match.group(1).strip()
-        if palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
+        if palavra.lower() not in [p.lower() for p in hist["palavras"]]:
             hist["palavras"].append(palavra)
             updated = True
     if fra_match:
         frase = fra_match.group(1).strip()
-        if frase.lower() not in [f.lower() for f in hist.get("frases", [])]:
+        if frase.lower() not in [f.lower() for f in hist["frases"]]:
             hist["frases"].append(frase)
             updated = True
-    # Atualiza no GitHub se mudou
     if updated:
         push_history(hist, sha)
     return block
