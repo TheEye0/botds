@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra Groq + SerpApi e persiste histórico local em historico.json com upload via github_uploader.
+Integra Groq + SerpApi, persiste histórico local em historico.json e faz upload via github_uploader.
 """
 import os
 import json
 import datetime
 import traceback
+import re
 from collections import defaultdict, deque
 from threading import Thread
 
@@ -17,21 +18,21 @@ from dotenv import load_dotenv
 from groq import Groq
 from serpapi import GoogleSearch
 
-# Importa uploader do GitHub
+# Importa uploader do GitHub (app/github_uploader.py)
 from app.github_uploader import upload_to_github
 
 # --- Environment ---
 load_dotenv()
-DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN")
-GROQ_API_KEY    = os.getenv("GROQ_API_KEY")
-SERPAPI_KEY     = os.getenv("SERPAPI_KEY")
-ALLOWED_GUILD   = int(os.getenv("ALLOWED_GUILD_ID", "0"))
-ALLOWED_USER    = int(os.getenv("ALLOWED_USER_ID", "0"))
-DEST_CHANNEL    = int(os.getenv("CANAL_DESTINO_ID", "0"))
-LLAMA_MODEL     = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+ALLOWED_GUILD = int(os.getenv("ALLOWED_GUILD_ID", "0"))
+ALLOWED_USER = int(os.getenv("ALLOWED_USER_ID", "0"))
+DEST_CHANNEL = int(os.getenv("CANAL_DESTINO_ID", "0"))
+LLAMA_MODEL = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
-# Caminho local para historico.json
-HISTORY_FILE    = os.path.join(
+# Caminho local do histórico
+HISTORY_FILE = os.path.join(
     os.path.dirname(__file__),
     os.getenv("HISTORICO_FILE_PATH", "historico.json")
 )
@@ -40,6 +41,7 @@ HISTORY_FILE    = os.path.join(
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+# Mantém até 10 mensagens de contexto por canal
 conversas = defaultdict(lambda: deque(maxlen=10))
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -69,8 +71,8 @@ def salvar_historico(hist: dict):
             json.dump(hist, f, ensure_ascii=False, indent=2)
     except Exception:
         traceback.print_exc()
-    # Chama uploader para gravar no GitHub
-    upload_to_github()
+    # Envia atualização para o GitHub
+    upload_to_github(HISTORY_FILE)
 
 # --- Geração de conteúdo diário ---
 async def gerar_conteudo_com_ia() -> str:
@@ -79,17 +81,17 @@ async def gerar_conteudo_com_ia() -> str:
 
     hist = carregar_historico()
     prompt = (
-        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução)." +
-        "Depois, forneça uma frase estoica em português com explicação.\n" +
-        "Use este formato exato (uma linha por item):\n" +
-        "Palavra: <palavra>\n" +
-        "Definição: <definição em português>\n" +
-        "Exemplo: <exemplo em inglês>\n" +
-        "Tradução do exemplo: <tradução em português>\n" +
-        "Frase estoica: <frase em português>\n" +
+        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
+        "Depois, forneça uma frase estoica em português com explicação.\n"
+        "Use este formato exato (uma linha por item):\n"
+        "Palavra: <palavra>\n"
+        "Definição: <definição em português>\n"
+        "Exemplo: <exemplo em inglês>\n"
+        "Tradução do exemplo: <tradução em português>\n"
+        "Frase estoica: <frase em português>\n"
         "Explicação: <explicação em português>"
     )
-    resp = groq_client.chat.completions.create(
+    raw = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[
             {"role": "system", "content": "Você é um professor de inglês e filosofia estoica."},
@@ -98,23 +100,21 @@ async def gerar_conteudo_com_ia() -> str:
         temperature=0.7
     ).choices[0].message.content.strip()
 
-    # Remove possíveis blocos repetidos
-    lower = resp.lower()
-    first = lower.find("palavra:")
-    second = lower.find("palavra:", first + 1)
-    if second != -1:
-        resp = resp[:second].strip()
+    # Mantém apenas o primeiro bloco completo (até Explicação:)
+    match = re.search(r'(?i)(Palavra:.*?Explicação:.*?)(?=Palavra:|$)', raw, re.DOTALL)
+    resp = match.group(1).strip() if match else raw
 
-    # Extrai palavra e frase
     palavra = None
     frase = None
     for line in resp.splitlines():
-        if line.lower().startswith("palavra:"):
-            palavra = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("frase estoica:"):
-            frase = line.split(":", 1)[1].strip()
+        l = line.strip()
+        if l.lower().startswith("palavra:"):
+            palavra = l.split(":", 1)[1].strip()
+        elif l.lower().startswith("frase estoica:"):
+            frase = l.split(":", 1)[1].strip()
 
     updated = False
+    # Verifica duplicatas (case-insensitive)
     if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
         hist.setdefault("palavras", []).append(palavra)
         updated = True
@@ -147,19 +147,16 @@ async def ask(ctx, *, pergunta: str):
     if not autorizado(ctx) or not groq_client:
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
 
-    # Histórico de conversas
     hist_chan = conversas[ctx.channel.id]
     hist_chan.append({"role": "user", "content": pergunta})
-
-    # Constrói prompt com contexto
     mensagens = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
+
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=mensagens,
         temperature=0.7
     ).choices[0].message.content
 
-    # Adiciona resposta ao histórico
     hist_chan.append({"role": "assistant", "content": resp})
     await ctx.send(resp)
 
@@ -168,7 +165,8 @@ async def search(ctx, *, consulta: str):
     if not autorizado(ctx) or not SERPAPI_KEY:
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     await ctx.send(f"🔍 Buscando: {consulta}")
-    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
+    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
+        .get_dict().get("organic_results", [])[:3]
     snippet = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
     resumo = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
