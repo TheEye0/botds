@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra Groq + SerpApi, persiste histórico via GitHub API, com comandos ask, search e keep-alive HTTP.
+Integra Groq + SerpApi, persiste histórico via GitHub API, com comandos ask, search, testar_conteudo e keep-alive HTTP.
 """
 import os
 import json
@@ -36,6 +36,11 @@ PORT             = int(os.getenv("PORT", "10000"))
 
 # --- Keep-alive HTTP Server ---
 class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -46,7 +51,6 @@ def start_keepalive_server():
     server = HTTPServer(("0.0.0.0", PORT), KeepAliveHandler)
     server.serve_forever()
 
-# Start the HTTP server in a background thread
 Thread(target=start_keepalive_server, daemon=True).start()
 
 # --- Discord Setup ---
@@ -77,8 +81,7 @@ def fetch_history():
         if resp.status_code == 200:
             data = resp.json()
             content = base64.b64decode(data.get("content", ""))
-            hist = json.loads(content)
-            return hist, data.get("sha")
+            return json.loads(content), data.get("sha")
     except Exception:
         traceback.print_exc()
     return {"palavras": [], "frases": []}, None
@@ -86,13 +89,13 @@ def fetch_history():
 
 def push_history(hist, sha=None):
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
-    content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False).encode()).decode()
+    content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False, indent=2).encode()).decode().encode()).decode()
     payload = {"message": "Atualiza histórico pelo bot", "content": content_b64, "branch": "main"}
     if sha:
         payload["sha"] = sha
     try:
-        put = requests.put(url, headers=GITHUB_API_HEADERS, json=payload, timeout=10)
-        put.raise_for_status()
+        r = requests.put(url, headers=GITHUB_API_HEADERS, json=payload, timeout=10)
+        r.raise_for_status()
     except Exception:
         traceback.print_exc()
 
@@ -100,18 +103,29 @@ def push_history(hist, sha=None):
 def build_prompt(used_palavras, used_frases):
     hist_text = ""
     if used_palavras:
-        hist_text += "Palavras já usadas: " + ", ".join(used_palavras) + ".\n"
+        hist_text += "Palavras já usadas: " + ", ".join(used_palavras) + ".
+"
     if used_frases:
-        hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".\n"
+        hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".
+"
+    # Prompt customizado pelo usuário
     hist_text += (
-        "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, sem repetir nenhuma das já usadas as palavras não precisam ser da área do estoisismo pode ser qualquer palavra.\n"
-        "Use este formato (uma linha por item, mas dando espaço entre elas e colocando o campo de cada uma em negrito e a resposta em texto normal):\n"
-        "Palavra: <palavra>\n"
-        "Definição: <definição em português>\n"
-        "Exemplo: <exemplo em inglês>\n"
-        "Tradução do exemplo: <tradução em português>\n"
-        "Frase estoica: <frase em português>\n"
-        "Explicação: <explicação em português>"
+        "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, "
+        "sem repetir nenhuma das já usadas as palavras não precisam ser da área do estoicismo pode ser qualquer palavra.
+"
+        "Use este formato (uma linha por item, mas dando espaço entre elas e colocando o campo de cada uma em negrito e a resposta em texto normal):
+"
+        "**Palavra**: <palavra>
+"
+        "**Definição**: <definição em português>
+"
+        "**Exemplo**: <exemplo em inglês>
+"
+        "**Tradução do exemplo**: <tradução em português>
+"
+        "**Frase estoica**: <frase em português>
+"
+        "**Explicação**: <explicação em português>"
     )
     return hist_text
 
@@ -125,26 +139,25 @@ async def generate_and_update():
     if not groq_client:
         return "⚠️ Serviço indisponível."
     hist, sha = fetch_history()
-    prompt = build_prompt(hist.get("palavras", []), hist.get("frases", []))
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=[{"role":"system","content":"Você faz o papel de professor de inglês e de um estoico."},
-                  {"role":"user","content":prompt}],
+        messages=[{"role":"system","content":"Você é um professor de inglês e estoico."},
+                  {"role":"user","content": build_prompt(hist["palavras"], hist["frases"]) }],
         temperature=0.7
     ).choices[0].message.content
     block = parse_block(resp)
-    pal_match = re.search(r'(?im)^Palavra: *(.*)', block)
-    fra_match = re.search(r'(?im)^Frase estoica: *(.*)', block)
+    pal = re.search(r'(?im)^Palavra: *(.*)', block)
+    fra = re.search(r'(?im)^Frase estoica: *(.*)', block)
     updated = False
-    if pal_match:
-        palavra = pal_match.group(1).strip()
-        if palavra.lower() not in [p.lower() for p in hist["palavras"]]:
-            hist["palavras"].append(palavra)
+    if pal:
+        p = pal.group(1).strip()
+        if p.lower() not in [x.lower() for x in hist["palavras"]]:
+            hist["palavras"].append(p)
             updated = True
-    if fra_match:
-        frase = fra_match.group(1).strip()
-        if frase.lower() not in [f.lower() for f in hist["frases"]]:
-            hist["frases"].append(frase)
+    if fra:
+        f = fra.group(1).strip()
+        if f.lower() not in [x.lower() for x in hist["frases"]]:
+            hist["frases"].append(f)
             updated = True
     if updated:
         push_history(hist, sha)
@@ -157,7 +170,6 @@ async def send_content(channel):
 
 # --- Helper for chunking messages ---
 def chunk_text(text: str, limit: int = 1900):
-    """Divide texto em pedaços menores que o limite."""
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
 # --- Commands ---
@@ -167,10 +179,10 @@ async def ask(ctx, *, pergunta: str):
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
     hist_chan = conversas[ctx.channel.id]
     hist_chan.append({"role": "user", "content": pergunta})
-    messages = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
+    msgs = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=messages,
+        messages=msgs,
         temperature=0.7
     ).choices[0].message.content
     hist_chan.append({"role": "assistant", "content": resp})
@@ -182,14 +194,8 @@ async def search(ctx, *, consulta: str):
     if not autorizado(ctx) or not SERPAPI_KEY:
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     await ctx.send(f"🔍 Buscando: {consulta}")
-    results = (
-        GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
-        .get_dict()
-        .get("organic_results", [])[:3]
-    )
-    snippet = "\n\n".join(
-        f"**{r['title']}**: {r['snippet']}" for r in results
-    ) or "Nenhum resultado."
+    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
+    snippet = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
     resumo = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[{"role": "system", "content": "Resuma resultados."}, {"role": "user", "content": snippet}],
@@ -197,6 +203,13 @@ async def search(ctx, *, consulta: str):
     ).choices[0].message.content
     for chunk in chunk_text(resumo):
         await ctx.send(chunk)
+
+@bot.command()
+async def testar_conteudo(ctx):
+    """Envia conteúdo gerado imediatamente."""
+    if not autorizado(ctx):
+        return await ctx.send("❌ Não autorizado.")
+    await send_content(ctx.channel)
 
 # --- Scheduled ---
 @tasks.loop(time=_time(hour=9, minute=0))
