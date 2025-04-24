@@ -89,7 +89,7 @@ def fetch_history():
 
 def push_history(hist, sha=None):
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
-    content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False, indent=2).encode()).decode().encode()).decode()
+    content_b64 = base64.b64encode(json.dumps(hist, ensure_ascii=False, indent=2).encode()).decode()
     payload = {"message": "Atualiza histórico pelo bot", "content": content_b64, "branch": "main"}
     if sha:
         payload["sha"] = sha
