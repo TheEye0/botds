@@ -47,11 +47,8 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot online!")
 
-def start_keepalive_server():
-    server = HTTPServer(("0.0.0.0", PORT), KeepAliveHandler)
-    server.serve_forever()
-
-Thread(target=start_keepalive_server, daemon=True).start()
+# Start HTTP server
+Thread(target=lambda: HTTPServer(("0.0.0.0", PORT), KeepAliveHandler).serve_forever(), daemon=True).start()
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -103,28 +100,19 @@ def push_history(hist, sha=None):
 def build_prompt(used_palavras, used_frases):
     hist_text = ""
     if used_palavras:
-        hist_text += "Palavras já usadas: " + ", ".join(used_palavras) + ".
-"
+        hist_text += "Palavras já usadas: " + ", ".join(used_palavras) + ".\n"
     if used_frases:
-        hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".
-"
+        hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".\n"
     # Prompt customizado pelo usuário
     hist_text += (
         "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, "
-        "sem repetir nenhuma das já usadas as palavras não precisam ser da área do estoicismo pode ser qualquer palavra.
-"
-        "Use este formato (uma linha por item, mas dando espaço entre elas e colocando o campo de cada uma em negrito e a resposta em texto normal):
-"
-        "**Palavra**: <palavra>
-"
-        "**Definição**: <definição em português>
-"
-        "**Exemplo**: <exemplo em inglês>
-"
-        "**Tradução do exemplo**: <tradução em português>
-"
-        "**Frase estoica**: <frase em português>
-"
+        "sem repetir nenhuma das já usadas; as palavras não precisam ser da área do estoicismo, podem ser qualquer palavra.\n"
+        "Use este formato (uma linha por item, mas dando espaço entre elas e colocando o campo de cada uma em negrito e a resposta em texto normal):\n"
+        "**Palavra**: <palavra>\n"
+        "**Definição**: <definição em português>\n"
+        "**Exemplo**: <exemplo em inglês>\n"
+        "**Tradução do exemplo**: <tradução em português>\n"
+        "**Frase estoica**: <frase em português>\n"
         "**Explicação**: <explicação em português>"
     )
     return hist_text
@@ -139,10 +127,11 @@ async def generate_and_update():
     if not groq_client:
         return "⚠️ Serviço indisponível."
     hist, sha = fetch_history()
+    prompt = build_prompt(hist.get("palavras", []), hist.get("frases", []))
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[{"role":"system","content":"Você é um professor de inglês e estoico."},
-                  {"role":"user","content": build_prompt(hist["palavras"], hist["frases"]) }],
+                  {"role":"user","content": prompt}],
         temperature=0.7
     ).choices[0].message.content
     block = parse_block(resp)
