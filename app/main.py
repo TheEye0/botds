@@ -104,8 +104,8 @@ def build_prompt(used_palavras, used_frases):
     if used_frases:
         hist_text += "Frases já usadas: " + ", ".join(used_frases) + ".\n"
     hist_text += (
-        "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, sem repetir nenhuma das já usadas.\n"
-        "Use este formato (uma linha por item):\n"
+        "Com base no histórico acima, gere APENAS uma nova palavra em inglês e uma nova frase estoica em português, sem repetir nenhuma das já usadas as palavras não precisam ser da área do estoisismo pode ser qualquer palavra.\n"
+        "Use este formato (uma linha por item, mas dando espaço entre elas e colocando o campo de cada uma em negrito e a resposta em texto normal):\n"
         "Palavra: <palavra>\n"
         "Definição: <definição em português>\n"
         "Exemplo: <exemplo em inglês>\n"
@@ -128,7 +128,7 @@ async def generate_and_update():
     prompt = build_prompt(hist.get("palavras", []), hist.get("frases", []))
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=[{"role":"system","content":"Você é um professor de inglês e estoico."},
+        messages=[{"role":"system","content":"Você faz o papel de professor de inglês e de um estoico."},
                   {"role":"user","content":prompt}],
         temperature=0.7
     ).choices[0].message.content
