@@ -24,18 +24,16 @@ from app.github_uploader import upload_to_github
 # --- Environment ---
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+GROQ_API_KEY  = os.getenv("GROQ_API_KEY")
+SERPAPI_KEY   = os.getenv("SERPAPI_KEY")
 ALLOWED_GUILD = int(os.getenv("ALLOWED_GUILD_ID", "0"))
-ALLOWED_USER = int(os.getenv("ALLOWED_USER_ID", "0"))
-DEST_CHANNEL = int(os.getenv("CANAL_DESTINO_ID", "0"))
-LLAMA_MODEL = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+ALLOWED_USER  = int(os.getenv("ALLOWED_USER_ID", "0"))
+DEST_CHANNEL  = int(os.getenv("CANAL_DESTINO_ID", "0"))
+LLAMA_MODEL   = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
-# Caminho local do histórico
-HISTORY_FILE = os.path.join(
-    os.path.dirname(__file__),
-    os.getenv("HISTORICO_FILE_PATH", "historico.json")
-)
+# Caminho local do histórico (arquivo no diretório de trabalho)
+HISTORICO_FILE_PATH = os.getenv("HISTORICO_FILE_PATH", "historico.json")
+HISTORY_FILE = HISTORICO_FILE_PATH
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
@@ -71,8 +69,8 @@ def salvar_historico(hist: dict):
             json.dump(hist, f, ensure_ascii=False, indent=2)
     except Exception:
         traceback.print_exc()
-    # Envia atualização para o GitHub
-    upload_to_github(HISTORY_FILE)
+    # Envia atualização para o GitHub (lê o arquivo pela raiz do projeto)
+    upload_to_github()
 
 # --- Geração de conteúdo diário ---
 async def gerar_conteudo_com_ia() -> str:
@@ -100,8 +98,8 @@ async def gerar_conteudo_com_ia() -> str:
         temperature=0.7
     ).choices[0].message.content.strip()
 
-    # Mantém apenas o primeiro bloco completo (até Explicação:)
-    match = re.search(r'(?i)(Palavra:.*?Explicação:.*?)(?=Palavra:|$)', raw, re.DOTALL)
+    # Extrai apenas o primeiro bloco (até antes do próximo 'Palavra:')
+    match = re.search(r'(?im)^(Palavra:.*?)(?=^Palavra:|\Z)', raw, re.DOTALL)
     resp = match.group(1).strip() if match else raw
 
     palavra = None
@@ -165,7 +163,7 @@ async def search(ctx, *, consulta: str):
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     await ctx.send(f"🔍 Buscando: {consulta}")
     # Busca resultados com SerpApi e obtém os primeiros 3
-    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})\
+    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}) \
         .get_dict().get("organic_results", [])[:3]
     snippet = "\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
     resumo = groq_client.chat.completions.create(
