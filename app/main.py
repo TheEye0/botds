@@ -2,6 +2,7 @@
 """
 main.py — BotDS Discord Bot
 Integra Groq + SerpApi, persiste histórico local em historico.json e faz upload via github_uploader.
+Certifique-se de que upload_to_github(path) aceite o caminho absoluto.
 """
 import os
 import json
@@ -19,6 +20,7 @@ from groq import Groq
 from serpapi import GoogleSearch
 
 # Importa uploader do GitHub (app/github_uploader.py)
+# Agora exporta upload_to_github(path: str)
 from app.github_uploader import upload_to_github
 
 # --- Environment ---
@@ -31,15 +33,15 @@ ALLOWED_USER  = int(os.getenv("ALLOWED_USER_ID", "0"))
 DEST_CHANNEL  = int(os.getenv("CANAL_DESTINO_ID", "0"))
 LLAMA_MODEL   = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
-# Caminho local do histórico (arquivo no diretório de trabalho)
+# Caminho local do histórico (usa caminho absoluto para garantir consistência)
 HISTORICO_FILE_PATH = os.getenv("HISTORICO_FILE_PATH", "historico.json")
-HISTORY_FILE = HISTORICO_FILE_PATH
+HISTORY_FILE = os.path.join(os.path.dirname(__file__), HISTORICO_FILE_PATH)
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-# Mantém até 10 mensagens de contexto por canal
+# Mantém até 10 mensagens de contexto por canal (apenas mensagens do usuário)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -69,8 +71,8 @@ def salvar_historico(hist: dict):
             json.dump(hist, f, ensure_ascii=False, indent=2)
     except Exception:
         traceback.print_exc()
-    # Envia atualização para o GitHub (lê o arquivo pela raiz do projeto)
-    upload_to_github()
+    # Envia atualização para o GitHub, passando path absoluto
+    upload_to_github(HISTORY_FILE)
 
 # --- Geração de conteúdo diário ---
 async def gerar_conteudo_com_ia() -> str:
@@ -98,9 +100,9 @@ async def gerar_conteudo_com_ia() -> str:
         temperature=0.7
     ).choices[0].message.content.strip()
 
-    # Extrai apenas o primeiro bloco (até antes do próximo 'Palavra:')
-    match = re.search(r'(?im)^(Palavra:.*?)(?=^Palavra:|\Z)', raw, re.DOTALL)
-    resp = match.group(1).strip() if match else raw
+    # Extrai apenas o primeiro bloco completo
+    match = re.search(r'(?im)^Palavra:.*?Explicação:.*?(?=^Palavra:|\Z)', raw, re.DOTALL)
+    resp = match.group(0).strip() if match else raw
 
     palavra = None
     frase = None
@@ -144,17 +146,26 @@ async def ask(ctx, *, pergunta: str):
     if not autorizado(ctx) or not groq_client:
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
 
-    hist_chan = conversas[ctx.channel.id]
-    hist_chan.append({"role": "user", "content": pergunta})
-    mensagens = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
+    # Guarda apenas o histórico de perguntas (sem respostas) para contexto
+    hist_user = conversas[ctx.channel.id]
+    hist_user.append(pergunta)
 
+    # Constrói prompt com histórico de perguntas
+    messages = [{"role": "system", "content": "Você é um assistente prestativo."}]
+    for q in hist_user:
+        messages.append({"role": "user", "content": q})
+
+    # Chama a API
     resp = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=mensagens,
+        messages=messages,
         temperature=0.7
     ).choices[0].message.content
 
-    hist_chan.append({"role": "assistant", "content": resp})
+    # Limpa histórico mantendo apenas últimas perguntas
+    if len(hist_user) > 9:
+        hist_user.popleft()
+
     await ctx.send(resp)
 
 @bot.command()
@@ -163,9 +174,17 @@ async def search(ctx, *, consulta: str):
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     await ctx.send(f"🔍 Buscando: {consulta}")
     # Busca resultados com SerpApi e obtém os primeiros 3
-    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}) \
-        .get_dict().get("organic_results", [])[:3]
-    snippet = "\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
+    results = (
+        GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
+        .get_dict()
+        .get("organic_results", [])[:3]
+    )
+    snippet = (
+        "\n\n"
+    ).join(
+        f"**{r['title']}**: {r['snippet']}"
+        for r in results
+    ) or "Nenhum resultado."
     resumo = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=[
