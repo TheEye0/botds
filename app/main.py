@@ -114,7 +114,6 @@ async def gerar_conteudo_com_ia() -> str:
             frase = l.split(":", 1)[1].strip()
 
     updated = False
-    # Verifica duplicatas (case-insensitive)
     if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
         hist.setdefault("palavras", []).append(palavra)
         updated = True
@@ -165,12 +164,16 @@ async def search(ctx, *, consulta: str):
     if not autorizado(ctx) or not SERPAPI_KEY:
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     await ctx.send(f"🔍 Buscando: {consulta}")
-    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})
+    # Busca resultados com SerpApi e obtém os primeiros 3
+    results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY})\
         .get_dict().get("organic_results", [])[:3]
-    snippet = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
+    snippet = "\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
     resumo = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
-        messages=[{"role": "system", "content": "Resuma resultados."}, {"role": "user", "content": snippet}],
+        messages=[
+            {"role": "system", "content": "Resuma resultados."},
+            {"role": "user", "content": snippet}
+        ],
         temperature=0.3
     ).choices[0].message.content
     await ctx.send(resumo)
@@ -186,6 +189,7 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     return f"Bot {bot.user.name if bot.user else ''} online!"
+
 
 def run_server():
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)), use_reloader=False)
