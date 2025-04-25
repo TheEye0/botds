@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-main.py — BotDS Discord Bot
-Versão funcional recuperada: integra Groq + SerpApi, persiste histórico via GitHub API,
-comandos ask, search, testar_conteudo, e keep-alive HTTP sem lógicas de duplicação avançadas.
+main.py — BotDS Discord Bot - Versão simplificada com foco na resolução de duplicação
+e problemas com histórico
 """
 import os
 import json
@@ -12,6 +11,7 @@ import base64
 import requests
 import discord
 import asyncio
+import time
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections import defaultdict, deque
@@ -55,9 +55,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 conversas = defaultdict(lambda: deque(maxlen=10))
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# --- Sistema de Controle de Duplicação ---
-# Usando locks para cada canal em vez de simples flags booleanas
-channel_locks = {}
+# --- Anti-duplicação simples ---
+# Usamos timestamps em vez de locks para evitar problemas
+last_command_time = {}
+COOLDOWN_SECONDS = 5  # Tempo mínimo entre comandos no mesmo canal
 
 # --- Helpers ---
 def autorizado(ctx):
@@ -65,84 +66,116 @@ def autorizado(ctx):
             or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID))
 
 # --- GitHub Persistence ---
+GITHUB_API_BASE = "https://api.github.com"
 GITHUB_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
+# Cache local do histórico para minimizar chamadas à API
+_historico_cache = None
+_historico_sha = None
+_last_fetch_time = 0
+CACHE_TIMEOUT = 60  # Segundos para expirar o cache
+
 def fetch_history():
-    """Recupera o histórico do GitHub."""
+    """Busca o histórico do GitHub com cache local."""
+    global _historico_cache, _historico_sha, _last_fetch_time
+    
+    current_time = time.time()
+    
+    # Se temos cache válido, use-o
+    if _historico_cache and _historico_sha and (current_time - _last_fetch_time) < CACHE_TIMEOUT:
+        print("Usando histórico em cache")
+        return _historico_cache, _historico_sha
+    
     try:
-        print("Buscando histórico...")
-        resp = requests.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}",
-            headers=GITHUB_HEADERS, timeout=10
-        )
+        print("Buscando histórico do GitHub...")
+        url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
+        resp = requests.get(url, headers=GITHUB_HEADERS, timeout=15)
+        
+        # Debug da resposta
+        print(f"Status: {resp.status_code}")
+        if not resp.ok:
+            print(f"Erro na resposta: {resp.text}")
+            
         if resp.ok:
             data = resp.json()
-            raw = base64.b64decode(data.get("content", ""))
-            hist_data = json.loads(raw)
-            print(f"Histórico obtido com sucesso: {hist_data}")
-            return hist_data, data.get("sha")
-        else:
-            print(f"Erro ao buscar histórico: {resp.status_code} - {resp.text}")
+            content_b64 = data.get("content", "")
+            sha = data.get("sha")
+            
+            if content_b64 and sha:
+                # Decodifica o conteúdo
+                content_bytes = base64.b64decode(content_b64)
+                content_str = content_bytes.decode('utf-8')
+                
+                # Parse do JSON
+                hist_data = json.loads(content_str)
+                
+                # Atualiza o cache
+                _historico_cache = hist_data
+                _historico_sha = sha
+                _last_fetch_time = current_time
+                
+                print(f"Histórico obtido com sucesso: {len(hist_data.get('palavras', []))} palavras, {len(hist_data.get('frases', []))} frases")
+                return hist_data, sha
     except Exception as e:
-        print(f"Exceção ao buscar histórico: {e}")
+        print(f"Erro ao buscar histórico: {e}")
         traceback.print_exc()
     
-    # Fallback para histórico vazio
+    # Se já temos um cache, use-o mesmo que expirado
+    if _historico_cache and _historico_sha:
+        print("Usando cache expirado após falha na busca")
+        return _historico_cache, _historico_sha
+        
+    # Último recurso - histórico vazio
     print("Retornando histórico vazio")
     return {"palavras": [], "frases": []}, None
 
 
-def push_history(hist, sha=None):
-    """Salva o histórico no GitHub com melhor tratamento de erros."""
-    try:
-        print(f"Salvando histórico: {hist}")
-        content_b64 = base64.b64encode(
-            json.dumps(hist, ensure_ascii=False).encode()
-        ).decode()
-        payload = {"message": "Atualiza historico.json pelo bot", "content": content_b64, "branch": "main"}
-        if sha:
-            payload["sha"] = sha
-        
-        print(f"Enviando PUT para GitHub com SHA: {sha}")
-        put_resp = requests.put(
-            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}",
-            headers=GITHUB_HEADERS, json=payload, timeout=10
-        )
-        
-        if put_resp.status_code == 409:  # Conflict
-            print("Conflito detectado no GitHub, buscando versão mais recente")
-            new_hist, new_sha = fetch_history()
-            
-            # Adicionar apenas itens novos
-            updated = False
-            for palavra in hist.get("palavras", []):
-                if palavra.lower() not in [x.lower() for x in new_hist.get("palavras", [])]:
-                    new_hist.setdefault("palavras", []).append(palavra)
-                    updated = True
-                    print(f"Adicionada palavra durante resolução de conflito: {palavra}")
-            
-            for frase in hist.get("frases", []):
-                if frase.lower() not in [x.lower() for x in new_hist.get("frases", [])]:
-                    new_hist.setdefault("frases", []).append(frase)
-                    updated = True
-                    print(f"Adicionada frase durante resolução de conflito: {frase}")
-            
-            if updated:
-                print("Tentando salvar novamente após resolver conflito")
-                return push_history(new_hist, new_sha)
-            else:
-                print("Nenhuma atualização necessária após resolução de conflito")
-                return True
-        
-        elif put_resp.ok:
-            print(f"Histórico salvo com sucesso: {put_resp.status_code}")
-            return True
-        else:
-            print(f"Erro ao salvar histórico: {put_resp.status_code} - {put_resp.text}")
-            return False
+def push_history(hist, sha):
+    """Salva o histórico no GitHub."""
+    global _historico_cache, _historico_sha, _last_fetch_time
     
+    if not sha:
+        print("ERRO: Tentativa de salvar histórico sem SHA")
+        return False
+        
+    try:
+        print(f"Salvando histórico: {len(hist.get('palavras', []))} palavras, {len(hist.get('frases', []))} frases")
+        
+        # Codifica o conteúdo em base64
+        content_json = json.dumps(hist, ensure_ascii=False, indent=2)
+        content_b64 = base64.b64encode(content_json.encode('utf-8')).decode('ascii')
+        
+        # Prepara o payload
+        payload = {
+            "message": "Atualiza historico.json via bot",
+            "content": content_b64,
+            "sha": sha
+        }
+        
+        # Debug do payload
+        print(f"SHA para update: {sha}")
+        
+        # Envia a requisição
+        url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
+        resp = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=15)
+        
+        # Debug da resposta
+        print(f"Status da resposta: {resp.status_code}")
+        if not resp.ok:
+            print(f"Erro na resposta: {resp.text}")
+            
+        if resp.ok:
+            # Atualiza o cache local
+            _historico_cache = hist
+            resp_data = resp.json()
+            _historico_sha = resp_data.get("content", {}).get("sha")
+            _last_fetch_time = time.time()
+            print("Histórico salvo com sucesso!")
+            return True
+            
+        return False
     except Exception as e:
-        print(f"Exceção ao salvar histórico: {e}")
+        print(f"Erro ao salvar histórico: {e}")
         traceback.print_exc()
         return False
 
@@ -150,135 +183,119 @@ def push_history(hist, sha=None):
 async def gerar_conteudo_com_ia():
     """Gera conteúdo com IA e garante persistência."""
     if not groq_client:
-        return "⚠️ Serviço indisponível."
+        return "⚠️ Serviço Groq indisponível."
     
-    block = None
+    content_text = None
     
-    # Tentar até 3 vezes para garantir salvamento
-    for tentativa in range(3):
-        try:
-            print(f"Gerando conteúdo - tentativa {tentativa+1}")
-            hist, sha = fetch_history()
-            
-            prompt = (
-                "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
-                "Depois, forneça uma frase estoica em português com explicação.\n"
-                "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
-            )
-            
-            resp = groq_client.chat.completions.create(
-                model=LLAMA_MODEL,
-                messages=[
-                    {"role": "system", "content": "Você é um professor de inglês e estoico."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
-            ).choices[0].message.content.strip()
-            
-            block = resp  # Guarda o conteúdo gerado
-            
-            # Extrai palavra/frase
-            palavra = re.search(r'(?im)^Palavra: *(.+)$', block)
-            frase = re.search(r'(?im)^Frase estoica: *(.+)$', block)
-            
-            # Flag para verificar se houve atualização
-            updated = False
-            
-            # Processa a palavra se encontrada
-            if palavra:
-                p = palavra.group(1).strip()
-                if p and p.lower() not in [x.lower() for x in hist.get("palavras", [])]:
-                    hist.setdefault("palavras", []).append(p)
-                    updated = True
-                    print(f"Nova palavra adicionada: {p}")
-            
-            # Processa a frase se encontrada
-            if frase:
-                f = frase.group(1).strip()
-                if f and f.lower() not in [x.lower() for x in hist.get("frases", [])]:
-                    hist.setdefault("frases", []).append(f)
-                    updated = True
-                    print(f"Nova frase adicionada: {f}")
-
-            # Salva apenas se houver algo novo
-            if updated:
-                print("Tentando salvar histórico atualizado")
-                if push_history(hist, sha):
-                    print("Histórico atualizado com sucesso!")
-                    break  # Sai do loop se salvou com sucesso
-                else:
-                    print(f"Falha ao salvar na tentativa {tentativa+1}, tentando novamente...")
-            else:
-                print("Nenhuma atualização necessária no histórico")
-                break  # Sai do loop se não há nada para salvar
-                
-        except Exception as e:
-            print(f"Erro na tentativa {tentativa+1}: {str(e)}")
-            traceback.print_exc()
-            if block is None:  # Se falhou antes de gerar conteúdo
-                block = f"⚠️ Erro ao gerar conteúdo: {str(e)}"
-            # Continua tentando se falhou
+    # Busca o histórico existente
+    hist, sha = fetch_history()
+    if not sha:
+        print("AVISO: Não foi possível obter SHA para o histórico")
     
-    return block  # Retorna o conteúdo gerado (ou mensagem de erro)
-
-async def acquire_lock(channel_id):
-    """Adquire lock para o canal de forma segura."""
-    channel_id = str(channel_id)  # Garante que seja string
-    
-    if channel_id not in channel_locks:
-        channel_locks[channel_id] = asyncio.Lock()
-    
-    # Tenta adquirir o lock com timeout
+    # Gera o conteúdo
     try:
-        await asyncio.wait_for(channel_locks[channel_id].acquire(), timeout=1.0)
-        return True
-    except asyncio.TimeoutError:
-        print(f"Timeout adquirindo lock para canal {channel_id}")
-        return False
+        prompt = (
+            "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
+            "Depois, forneça uma frase estoica em português com explicação.\n"
+            "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
+        )
+        
+        resp = groq_client.chat.completions.create(
+            model=LLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": "Você é um professor de inglês e estoico."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        
+        content_text = resp.choices[0].message.content.strip()
+        print(f"Conteúdo gerado: {content_text[:50]}...")
+        
+        # Extrai palavra/frase
+        palavra_match = re.search(r'(?im)^Palavra: *(.+)$', content_text)
+        frase_match = re.search(r'(?im)^Frase estoica: *(.+)$', content_text)
+        
+        palavra = palavra_match.group(1).strip() if palavra_match else None
+        frase = frase_match.group(1).strip() if frase_match else None
+        
+        print(f"Palavra extraída: {palavra}")
+        print(f"Frase extraída: {frase}")
+        
+        # Verifica se já existem no histórico
+        if palavra:
+            # Garante que este campo existe
+            if "palavras" not in hist:
+                hist["palavras"] = []
+                
+            # Verifica se é nova
+            if palavra.lower() not in [p.lower() for p in hist["palavras"]]:
+                hist["palavras"].append(palavra)
+                print(f"Nova palavra adicionada: {palavra}")
+            else:
+                print(f"Palavra já existe no histórico: {palavra}")
+        
+        if frase:
+            # Garante que este campo existe
+            if "frases" not in hist:
+                hist["frases"] = []
+                
+            # Verifica se é nova
+            if frase.lower() not in [f.lower() for f in hist["frases"]]:
+                hist["frases"].append(frase)
+                print(f"Nova frase adicionada: {frase}")
+            else:
+                print(f"Frase já existe no histórico: {frase}")
+        
+        # Salva no GitHub se houve alterações
+        if sha and (palavra or frase):
+            # Força o salvamento apenas se houve alterações
+            saved = push_history(hist, sha)
+            if saved:
+                print("Histórico atualizado com sucesso!")
+            else:
+                print("Falha ao atualizar histórico")
+        
+    except Exception as e:
+        print(f"Erro ao gerar conteúdo: {e}")
+        traceback.print_exc()
+        content_text = f"⚠️ Erro ao gerar conteúdo: {str(e)}"
+    
+    return content_text
 
-def release_lock(channel_id):
-    """Libera o lock do canal se estiver adquirido."""
+# --- Verificação anti-duplicação ---
+def check_cooldown(channel_id):
+    """Verifica se pode executar outro comando no canal."""
     channel_id = str(channel_id)
-    if channel_id in channel_locks and channel_locks[channel_id].locked():
-        try:
-            channel_locks[channel_id].release()
-            print(f"Lock liberado para canal {channel_id}")
-        except RuntimeError:
-            print(f"Erro ao liberar lock para canal {channel_id}")
+    now = time.time()
+    
+    if channel_id in last_command_time:
+        time_diff = now - last_command_time[channel_id]
+        if time_diff < COOLDOWN_SECONDS:
+            print(f"Comando rejeitado: cooldown ({time_diff:.2f}s < {COOLDOWN_SECONDS}s)")
+            return False
+    
+    # Atualiza o timestamp
+    last_command_time[channel_id] = now
+    return True
 
+# --- Comandos Discord ---
 async def send_content(channel):
-    """Envia conteúdo para o canal com proteção contra duplicação."""
+    """Envia conteúdo para o canal com proteção anti-duplicação."""
     channel_id = str(channel.id)
     
-    # Tenta adquirir o lock
-    if not await acquire_lock(channel_id):
-        await channel.send("⏳ Já estou processando um comando neste canal.")
+    # Verifica o cooldown
+    if not check_cooldown(channel_id):
+        await channel.send(f"⏳ Aguarde {COOLDOWN_SECONDS} segundos entre comandos.")
         return
     
-    try:
-        print(f"Gerando conteúdo para canal {channel_id}")
-        # Indica que está processando
-        processing_msg = await channel.send("⌛ Gerando conteúdo...")
-        
-        # Gera o conteúdo
-        content = await gerar_conteudo_com_ia()
-        
-        # Remove mensagem de processamento
-        try:
-            await processing_msg.delete()
-        except:
-            pass
-        
-        # Envia o conteúdo
-        await channel.send(content)
-    except Exception as e:
-        print(f"Erro em send_content: {e}")
-        traceback.print_exc()
-        await channel.send(f"❌ Erro ao gerar conteúdo: {str(e)}")
-    finally:
-        release_lock(channel_id)
+    # Indica que está processando
+    await channel.send("⌛ Gerando conteúdo...")
+    
+    # Gera e envia o conteúdo
+    content = await gerar_conteudo_com_ia()
+    await channel.send(content)
 
-# --- Commands ---
 @bot.command()
 async def ask(ctx, *, pergunta: str):
     """Comando para fazer perguntas ao bot."""
@@ -286,15 +303,13 @@ async def ask(ctx, *, pergunta: str):
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
     
     channel_id = str(ctx.channel.id)
+    if not check_cooldown(channel_id):
+        return await ctx.send(f"⏳ Aguarde {COOLDOWN_SECONDS} segundos entre comandos.")
     
-    # Tenta adquirir o lock
-    if not await acquire_lock(channel_id):
-        await ctx.send("⏳ Já estou processando um comando neste canal.")
-        return
+    # Indica que está processando
+    await ctx.send("⌛ Pensando...")
     
     try:
-        processing_msg = await ctx.send("⌛ Pensando...")
-        
         h = conversas[ctx.channel.id]
         h.append({"role": "user", "content": pergunta})
         
@@ -305,19 +320,9 @@ async def ask(ctx, *, pergunta: str):
         ).choices[0].message.content
         
         h.append({"role": "assistant", "content": resp})
-        
-        try:
-            await processing_msg.delete()
-        except:
-            pass
-            
         await ctx.send(resp)
     except Exception as e:
-        print(f"Erro no comando ask: {e}")
-        traceback.print_exc()
-        await ctx.send(f"❌ Erro ao processar pergunta: {str(e)}")
-    finally:
-        release_lock(channel_id)
+        await ctx.send(f"❌ Erro: {str(e)}")
 
 @bot.command()
 async def search(ctx, *, consulta: str):
@@ -326,15 +331,12 @@ async def search(ctx, *, consulta: str):
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     
     channel_id = str(ctx.channel.id)
+    if not check_cooldown(channel_id):
+        return await ctx.send(f"⏳ Aguarde {COOLDOWN_SECONDS} segundos entre comandos.")
     
-    # Tenta adquirir o lock
-    if not await acquire_lock(channel_id):
-        await ctx.send("⏳ Já estou processando um comando neste canal.")
-        return
+    await ctx.send(f"🔍 Buscando: {consulta}")
     
     try:
-        processing_msg = await ctx.send(f"🔍 Buscando: {consulta}")
-        
         results = GoogleSearch({"q": consulta, "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY}).get_dict().get("organic_results", [])[:3]
         snippet = "\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
         
@@ -347,18 +349,9 @@ async def search(ctx, *, consulta: str):
             temperature=0.3
         ).choices[0].message.content
         
-        try:
-            await processing_msg.delete()
-        except:
-            pass
-            
         await ctx.send(resumo)
     except Exception as e:
-        print(f"Erro no comando search: {e}")
-        traceback.print_exc()
-        await ctx.send(f"❌ Erro na busca: {str(e)}")
-    finally:
-        release_lock(channel_id)
+        await ctx.send(f"❌ Erro: {str(e)}")
 
 @bot.command()
 async def testar_conteudo(ctx):
@@ -366,7 +359,6 @@ async def testar_conteudo(ctx):
     if not autorizado(ctx):
         return await ctx.send("❌ Não autorizado.")
     
-    print(f"Comando testar_conteudo recebido no canal {ctx.channel.id}")
     await send_content(ctx.channel)
 
 # --- Scheduled ---
@@ -375,14 +367,6 @@ async def daily_send():
     """Tarefa agendada para envio diário."""
     ch = bot.get_channel(DEST_CHANNEL_ID)
     if ch:
-        channel_id = str(DEST_CHANNEL_ID)
-        
-        # Verifica se já está processando
-        if channel_id in channel_locks and channel_locks[channel_id].locked():
-            print(f"⏳ Já está processando um comando no canal {DEST_CHANNEL_ID}, pulando envio diário.")
-            return
-            
-        print(f"Iniciando envio diário para canal {DEST_CHANNEL_ID}")
         await send_content(ch)
 
 @bot.event
