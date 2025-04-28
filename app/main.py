@@ -158,22 +158,50 @@ async def gerar_conteudo_com_ia():
     print(f"🔄 [DEBUG] fetch_history retornou sha={sha!r} e hist={hist}")
     
     try:
-        # 2) GERA CONTEÚDO
+        # 2) GERA CONTEÚDO — tenta até encontrar algo inédito
         prompt = (
             "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
             "Depois, forneça uma frase estoica em português com explicação.\n"
             "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
         )
-        resp = groq_client.chat.completions.create(
-            model=LLAMA_MODEL,
-            messages=[
-                {"role": "system", "content": "Você é um professor de inglês e estoico."},
-                {"role": "user",   "content": prompt}
-            ],
-            temperature=0.7
-        )
-        content_text = resp.choices[0].message.content.strip()
-        print(f"✏️ [DEBUG] Conteúdo bruto gerado:\n{content_text}\n")
+
+        MAX_TENTATIVAS = 5
+        palavra = frase = None
+        altered  = False
+
+        for tentativa in range(1, MAX_TENTATIVAS + 1):
+            # pede conteúdo à Groq
+            resp = groq_client.chat.completions.create(
+                model=LLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": "Você é um professor de inglês e estoico."},
+                    {"role": "user",   "content": prompt}
+                ],
+                temperature=0.7
+            )
+            content_text = resp.choices[0].message.content.strip()
+            print(f"🔁 [DEBUG] Tentativa {tentativa}: conteúdo bruto:\n{content_text}\n")
+
+            # -------- LIMPA E EXTRAI ----------
+            plain = content_text.replace("*", "")
+            m1 = re.search(r'(?im)^palavra:\s*(.+)$', plain, flags=re.MULTILINE)
+            m2 = re.search(r'(?im)^frase estoica:\s*(.+)$', plain, flags=re.MULTILINE)
+            palavra = m1.group(1).strip() if m1 else None
+            frase   = m2.group(1).strip() if m2 else None
+
+            lower_palavras = [p.lower() for p in hist.get("palavras", [])]
+            lower_frases   = [f.lower() for f in hist.get("frases", [])]
+
+            # se ao menos um é novo, sai do loop
+            if (palavra and palavra.lower() not in lower_palavras) or \
+               (frase and frase.lower() not in lower_frases):
+                altered = True
+                print("✅ [DEBUG] Conteúdo inédito encontrado")
+                break
+
+            print("🔁 [DEBUG] Repetido, pedindo novamente…")
+
+        # se não achou nada novo em 5 tentativas, altered permanece False
         
         # 3) Limpa todos os '*' e extrai com regex MULTILINE
         print(f"✏️ [DEBUG] Conteúdo bruto gerado:\n{content_text}\n")
