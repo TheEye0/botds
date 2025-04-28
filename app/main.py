@@ -146,87 +146,76 @@ def push_history(hist, sha):
 
 # --- Content Generation ---
 async def gerar_conteudo_com_ia():
-    """Gera conteúdo com IA e garante persistência."""
+    print("🔍 [DEBUG] Início de gerar_conteudo_com_ia()")
     if not groq_client:
+        print("⚠️ [DEBUG] groq_client indisponível")
         return "⚠️ Serviço Groq indisponível."
     
-    content_text = None
-    
-    # Busca o histórico existente
+    # 1) FETCH HISTORY
+    print("🔍 [DEBUG] Antes de fetch_history()")
     hist, sha = fetch_history()
-    if not sha:
-        print("AVISO: Não foi possível obter SHA para o histórico")
+    print(f"🔄 [DEBUG] fetch_history retornou sha={sha!r} e hist={hist}")
     
-    # Gera o conteúdo
+    # 2) Geração de conteúdo
     try:
         prompt = (
             "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
             "Depois, forneça uma frase estoica em português com explicação.\n"
-            "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
+            "Formato: uma linha por item dando 1 espaço entre as linhas e colocando em negrito a classe: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
         )
-        
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
             messages=[
                 {"role": "system", "content": "Você é um professor de inglês e estoico."},
-                {"role": "user", "content": prompt}
+                {"role": "user",   "content": prompt}
             ],
             temperature=0.7
         )
-        
         content_text = resp.choices[0].message.content.strip()
-        print(f"Conteúdo gerado: {content_text[:50]}...")
-        
-        # Extrai palavra/frase
+        print(f"✏️ [DEBUG] Conteúdo gerado: {content_text[:60]}...")
+
+        # Extração de palavra/frase
         palavra_match = re.search(r'(?im)^Palavra: *(.+)$', content_text)
-        frase_match = re.search(r'(?im)^Frase estoica: *(.+)$', content_text)
-        
+        frase_match   = re.search(r'(?im)^Frase estoica: *(.+)$', content_text)
         palavra = palavra_match.group(1).strip() if palavra_match else None
-        frase = frase_match.group(1).strip() if frase_match else None
-        
-        print(f"Palavra extraída: {palavra}")
-        print(f"Frase extraída: {frase}")
-        
-        # Verifica se já existem no histórico
+        frase   = frase_match.group(1).strip() if frase_match else None
+        print(f"🔎 [DEBUG] palavra={palavra!r}, frase={frase!r}")
+
+        # 3) Detecta alterações
+        altered = False
+        # palavras
         if palavra:
-            # Garante que este campo existe
-            if "palavras" not in hist:
-                hist["palavras"] = []
-                
-            # Verifica se é nova
-            if palavra.lower() not in [p.lower() for p in hist["palavras"]]:
-                hist["palavras"].append(palavra)
-                print(f"Nova palavra adicionada: {palavra}")
+            lower_palavras = [p.lower() for p in hist.get("palavras", [])]
+            if palavra.lower() not in lower_palavras:
+                hist.setdefault("palavras", []).append(palavra)
+                print(f"➕ [DEBUG] Nova palavra: {palavra!r}")
+                altered = True
             else:
-                print(f"Palavra já existe no histórico: {palavra}")
-        
+                print("✔️ [DEBUG] Palavra já existe")
+        # frases
         if frase:
-            # Garante que este campo existe
-            if "frases" not in hist:
-                hist["frases"] = []
-                
-            # Verifica se é nova
-            if frase.lower() not in [f.lower() for f in hist["frases"]]:
-                hist["frases"].append(frase)
-                print(f"Nova frase adicionada: {frase}")
+            lower_frases = [f.lower() for f in hist.get("frases", [])]
+            if frase.lower() not in lower_frases:
+                hist.setdefault("frases", []).append(frase)
+                print(f"➕ [DEBUG] Nova frase: {frase!r}")
+                altered = True
             else:
-                print(f"Frase já existe no histórico: {frase}")
-        
-        # Salva no GitHub se houve alterações
-        if sha and (palavra or frase):
-            # Força o salvamento apenas se houve alterações
+                print("✔️ [DEBUG] Frase já existe")
+
+        # 4) Se houver algo novo, salva
+        if altered:
+            print("💾 [DEBUG] Alterações detectadas, chamando push_history()")
             saved = push_history(hist, sha)
-            if saved:
-                print("Histórico atualizado com sucesso!")
-            else:
-                print("Falha ao atualizar histórico")
-        
+            print(f"💾 [DEBUG] push_history retornou {saved}")
+        else:
+            print("💾 [DEBUG] Sem alterações, não chama push_history()")
+
     except Exception as e:
-        print(f"Erro ao gerar conteúdo: {e}")
-        traceback.print_exc()
-        content_text = f"⚠️ Erro ao gerar conteúdo: {str(e)}"
+        print(f"❌ [DEBUG] Erro em gerar: {e}", traceback.format_exc())
+        content_text = f"⚠️ Erro ao gerar conteúdo: {e}"
     
     return content_text
+
 
 # --- Verificação anti-duplicação ---
 def check_cooldown(channel_id):
