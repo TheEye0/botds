@@ -146,22 +146,23 @@ def push_history(hist, sha):
 
 # --- Content Generation ---
 async def gerar_conteudo_com_ia():
+    import traceback  # só para garantir
     print("🔍 [DEBUG] Início de gerar_conteudo_com_ia()")
     if not groq_client:
         print("⚠️ [DEBUG] groq_client indisponível")
         return "⚠️ Serviço Groq indisponível."
     
-    # 1) FETCH HISTORY
+    # 1) BUSCA HISTÓRICO
     print("🔍 [DEBUG] Antes de fetch_history()")
     hist, sha = fetch_history()
     print(f"🔄 [DEBUG] fetch_history retornou sha={sha!r} e hist={hist}")
     
-    # 2) Geração de conteúdo
     try:
+        # 2) GERA CONTEÚDO
         prompt = (
             "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
             "Depois, forneça uma frase estoica em português com explicação.\n"
-            "Formato: uma linha por item dando 1 espaço entre as linhas e colocando em negrito a classe: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
+            "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
         )
         resp = groq_client.chat.completions.create(
             model=LLAMA_MODEL,
@@ -172,66 +173,52 @@ async def gerar_conteudo_com_ia():
             temperature=0.7
         )
         content_text = resp.choices[0].message.content.strip()
-        print(f"✏️ [DEBUG] Conteúdo gerado: {content_text[:60]}...")
-
+        print(f"✏️ [DEBUG] Conteúdo bruto gerado:\n{content_text}\n")
+        
+        # 3) Lê linha a linha, limpa markdown e extrai
         lines = content_text.splitlines()
-
+        print(f"🔍 [DEBUG] Linhas detectadas: {lines}")
         palavra = None
         frase   = None
-
+        
         for raw in lines:
-            # remove ** e espaços nas pontas
             clean = raw.strip().strip('*').strip()
-            lower = clean.lower()
-        
-            if lower.startswith("palavra:"):
-                # pega tudo após o primeiro ":"
-                palavra = clean.split(":", 1)[1].strip()
+            print(f"🔍 [DEBUG] Linha limpa: {clean}")
+            low = clean.lower()
+            if low.startswith("palavra:"):
+                palavra = clean.split(":",1)[1].strip()
                 print(f"🔎 [DEBUG] Extraída palavra via split: {palavra!r}")
-        
-            elif lower.startswith("frase estoica:"):
-                frase = clean.split(":", 1)[1].strip()
+            elif low.startswith("frase estoica:"):
+                frase = clean.split(":",1)[1].strip()
                 print(f"🔎 [DEBUG] Extraída frase via split: {frase!r}")
-
-        # Extração de palavra/frase
-        palavra_match = re.search(r'(?im)^Palavra: *(.+)$', content_text)
-        frase_match   = re.search(r'(?im)^Frase estoica: *(.+)$', content_text)
-        palavra = palavra_match.group(1).strip() if palavra_match else None
-        frase   = frase_match.group(1).strip() if frase_match else None
-        print(f"🔎 [DEBUG] palavra={palavra!r}, frase={frase!r}")
-
-        # 3) Detecta alterações
+        
+        # 4) Verifica alterações
         altered = False
-        # palavras
-        if palavra:
-            lower_palavras = [p.lower() for p in hist.get("palavras", [])]
-            if palavra.lower() not in lower_palavras:
-                hist.setdefault("palavras", []).append(palavra)
-                print(f"➕ [DEBUG] Nova palavra: {palavra!r}")
-                altered = True
-            else:
-                print("✔️ [DEBUG] Palavra já existe")
-        # frases
-        if frase:
-            lower_frases = [f.lower() for f in hist.get("frases", [])]
-            if frase.lower() not in lower_frases:
-                hist.setdefault("frases", []).append(frase)
-                print(f"➕ [DEBUG] Nova frase: {frase!r}")
-                altered = True
-            else:
-                print("✔️ [DEBUG] Frase já existe")
-
-        # 4) Se houver algo novo, salva
+        if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
+            hist.setdefault("palavras", []).append(palavra)
+            print(f"➕ [DEBUG] Nova palavra adicionada: {palavra!r}")
+            altered = True
+        else:
+            print("✔️ [DEBUG] Palavra repetida ou ausente")
+        
+        if frase and frase.lower() not in [f.lower() for f in hist.get("frases", [])]:
+            hist.setdefault("frases", []).append(frase)
+            print(f"➕ [DEBUG] Nova frase adicionada: {frase!r}")
+            altered = True
+        else:
+            print("✔️ [DEBUG] Frase repetida ou ausente")
+        
+        # 5) Salva somente se alterou
         if altered:
             print("💾 [DEBUG] Alterações detectadas, chamando push_history()")
             saved = push_history(hist, sha)
             print(f"💾 [DEBUG] push_history retornou {saved}")
         else:
             print("💾 [DEBUG] Sem alterações, não chama push_history()")
-
+    
     except Exception as e:
-        print(f"❌ [DEBUG] Erro em gerar: {e}", traceback.format_exc())
-        content_text = f"⚠️ Erro ao gerar conteúdo: {e}"
+        print(f"❌ [DEBUG] Erro em gerar_conteudo_com_ia: {e}", traceback.format_exc())
+        return f"⚠️ Erro ao gerar conteúdo: {e}"
     
     return content_text
 
