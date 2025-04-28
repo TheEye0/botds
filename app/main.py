@@ -174,6 +174,25 @@ async def gerar_conteudo_com_ia():
         content_text = resp.choices[0].message.content.strip()
         print(f"✏️ [DEBUG] Conteúdo gerado: {content_text[:60]}...")
 
+        lines = content_text.splitlines()
+
+        palavra = None
+        frase   = None
+
+        for raw in lines:
+            # remove ** e espaços nas pontas
+            clean = raw.strip().strip('*').strip()
+            lower = clean.lower()
+        
+            if lower.startswith("palavra:"):
+                # pega tudo após o primeiro ":"
+                palavra = clean.split(":", 1)[1].strip()
+                print(f"🔎 [DEBUG] Extraída palavra via split: {palavra!r}")
+        
+            elif lower.startswith("frase estoica:"):
+                frase = clean.split(":", 1)[1].strip()
+                print(f"🔎 [DEBUG] Extraída frase via split: {frase!r}")
+
         # Extração de palavra/frase
         palavra_match = re.search(r'(?im)^Palavra: *(.+)$', content_text)
         frase_match   = re.search(r'(?im)^Frase estoica: *(.+)$', content_text)
