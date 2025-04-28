@@ -75,108 +75,73 @@ _historico_sha = None
 _last_fetch_time = 0
 CACHE_TIMEOUT = 60  # Segundos para expirar o cache
 
-def fetch_history():
-    """Busca o histórico do GitHub com cache local."""
+# --- GitHub Persistence revisitada ---
+def fetch_history(force=False):
+    """Busca o histórico do GitHub, ignorando cache se force=True."""
     global _historico_cache, _historico_sha, _last_fetch_time
-    
-    current_time = time.time()
-    
-    # Se temos cache válido, use-o
-    if _historico_cache and _historico_sha and (current_time - _last_fetch_time) < CACHE_TIMEOUT:
-        print("Usando histórico em cache")
+
+    if not force and _historico_cache and (time.time() - _last_fetch_time) < CACHE_TIMEOUT:
         return _historico_cache, _historico_sha
-    
+
     try:
-        print("Buscando histórico do GitHub...")
         url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
         resp = requests.get(url, headers=GITHUB_HEADERS, timeout=15)
-        
-        # Debug da resposta
-        print(f"Status: {resp.status_code}")
-        if not resp.ok:
-            print(f"Erro na resposta: {resp.text}")
-            
-        if resp.ok:
-            data = resp.json()
-            content_b64 = data.get("content", "")
-            sha = data.get("sha")
-            
-            if content_b64 and sha:
-                # Decodifica o conteúdo
-                content_bytes = base64.b64decode(content_b64)
-                content_str = content_bytes.decode('utf-8')
-                
-                # Parse do JSON
-                hist_data = json.loads(content_str)
-                
-                # Atualiza o cache
-                _historico_cache = hist_data
-                _historico_sha = sha
-                _last_fetch_time = current_time
-                
-                print(f"Histórico obtido com sucesso: {len(hist_data.get('palavras', []))} palavras, {len(hist_data.get('frases', []))} frases")
-                return hist_data, sha
+        resp.raise_for_status()
+        data = resp.json()
+        content_b64 = data.get("content", "")
+        sha = data.get("sha")
+        content = base64.b64decode(content_b64).decode("utf-8")
+        hist_data = json.loads(content)
+        # atualiza cache
+        _historico_cache = hist_data
+        _historico_sha   = sha
+        _last_fetch_time = time.time()
+        print(f"🔄 Histórico carregado (sha={sha})")
+        return hist_data, sha
     except Exception as e:
-        print(f"Erro ao buscar histórico: {e}")
-        traceback.print_exc()
-    
-    # Se já temos um cache, use-o mesmo que expirado
-    if _historico_cache and _historico_sha:
-        print("Usando cache expirado após falha na busca")
-        return _historico_cache, _historico_sha
-        
-    # Último recurso - histórico vazio
-    print("Retornando histórico vazio")
-    return {"palavras": [], "frases": []}, None
+        print("⚠️ Erro ao buscar histórico:", e)
+        # se já tinha cache, devolve mesmo expirado
+        if _historico_cache and _historico_sha:
+            return _historico_cache, _historico_sha
+        # caso contrário, retorna vazio
+        return {"palavras": [], "frases": []}, None
 
 
 def push_history(hist, sha):
-    """Salva o histórico no GitHub."""
+    """Cria ou atualiza o historico.json no GitHub. Re-tenta em caso de conflito."""
     global _historico_cache, _historico_sha, _last_fetch_time
-    
-    if not sha:
-        print("ERRO: Tentativa de salvar histórico sem SHA")
-        return False
-        
-    try:
-        print(f"Salvando histórico: {len(hist.get('palavras', []))} palavras, {len(hist.get('frases', []))} frases")
-        
-        # Codifica o conteúdo em base64
-        content_json = json.dumps(hist, ensure_ascii=False, indent=2)
-        content_b64 = base64.b64encode(content_json.encode('utf-8')).decode('ascii')
-        
-        # Prepara o payload
-        payload = {
-            "message": "Atualiza historico.json via bot",
-            "content": content_b64,
-            "sha": sha
-        }
-        
-        # Debug do payload
-        print(f"SHA para update: {sha}")
-        
-        # Envia a requisição
-        url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
-        resp = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=15)
-        
-        # Debug da resposta
-        print(f"Status da resposta: {resp.status_code}")
-        if not resp.ok:
-            print(f"Erro na resposta: {resp.text}")
-            
-        if resp.ok:
-            # Atualiza o cache local
-            _historico_cache = hist
-            resp_data = resp.json()
-            _historico_sha = resp_data.get("content", {}).get("sha")
-            _last_fetch_time = time.time()
-            print("Histórico salvo com sucesso!")
-            return True
-            
-        return False
-    except Exception as e:
-        print(f"Erro ao salvar histórico: {e}")
-        traceback.print_exc()
+
+    content_json = json.dumps(hist, ensure_ascii=False, indent=2)
+    content_b64  = base64.b64encode(content_json.encode("utf-8")).decode("ascii")
+
+    payload = {
+        "message": "Atualiza historico.json via bot",
+        "content": content_b64,
+    }
+    # se tivermos SHA, é atualização; senão é criação
+    if sha:
+        payload["sha"] = sha
+
+    url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{HISTORICO_PATH}"
+    resp = requests.put(url, headers=GITHUB_HEADERS, json=payload, timeout=15)
+
+    # conflito de SHA: máquina concorrente atualizou antes de nós
+    if resp.status_code == 409:
+        print("⚠️ Conflito de SHA — buscando novo SHA e re-tentando...")
+        _historico_cache = None
+        _, new_sha = fetch_history(force=True)
+        return push_history(hist, new_sha)
+
+    if resp.ok:
+        data = resp.json().get("content", {})
+        _historico_sha = data.get("sha")
+        _last_fetch_time = time.time()
+        # invalida cache para próxima leitura
+        _historico_cache = None
+        print(f"✅ Histórico salvo com sucesso (novo sha={_historico_sha})")
+        return True
+    else:
+        print("❌ Erro ao salvar histórico:", resp.status_code, resp.text)
         return False
 
 # --- Content Generation ---
