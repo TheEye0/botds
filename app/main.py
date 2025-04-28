@@ -175,23 +175,30 @@ async def gerar_conteudo_com_ia():
         content_text = resp.choices[0].message.content.strip()
         print(f"✏️ [DEBUG] Conteúdo bruto gerado:\n{content_text}\n")
         
-        # 3) Lê linha a linha, limpa markdown e extrai
-        lines = content_text.splitlines()
-        print(f"🔍 [DEBUG] Linhas detectadas: {lines}")
-        palavra = None
-        frase   = None
-        
-        for raw in lines:
-            clean = raw.strip().strip('*').strip()
-            print(f"🔍 [DEBUG] Linha limpa: {clean}")
-            low = clean.lower()
-            if low.startswith("palavra:"):
-                palavra = clean.split(":",1)[1].strip()
-                print(f"🔎 [DEBUG] Extraída palavra via split: {palavra!r}")
-            elif low.startswith("frase estoica:"):
-                frase = clean.split(":",1)[1].strip()
-                print(f"🔎 [DEBUG] Extraída frase via split: {frase!r}")
-        
+        # 3) Limpa todos os '*' e extrai com regex MULTILINE
+        print(f"✏️ [DEBUG] Conteúdo bruto gerado:\n{content_text}\n")
+
+        # remove todos os asteriscos
+        plain = content_text.replace("*", "")
+        print(f"🔍 [DEBUG] Conteúdo sem asteriscos (plain):\n{plain}\n")
+
+        # extrai 'palavra' e 'frase estoica' no modo MULTILINE
+        m1 = re.search(r'(?im)^palavra:\s*(.+)$', plain, flags=re.MULTILINE)
+        m2 = re.search(r'(?im)^frase estoica:\s*(.+)$', plain, flags=re.MULTILINE)
+
+        palavra = m1.group(1).strip() if m1 else None
+        frase   = m2.group(1).strip() if m2 else None
+
+        if palavra:
+            print(f"🔎 [DEBUG] palavra extraída: {palavra!r}")
+        else:
+            print("🔍 [DEBUG] palavra NÃO encontrada")
+
+        if frase:
+            print(f"🔎 [DEBUG] frase extraída: {frase!r}")
+        else:
+            print("🔍 [DEBUG] frase NÃO encontrada")
+
         # 4) Verifica alterações
         altered = False
         if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
