@@ -309,6 +309,7 @@ async def search(ctx, *, consulta: str):
 
 @bot.command()
 async def testar_conteudo(ctx):
+    print("🛠️ [DEBUG] Entrou em testar_conteudo()", ctx.channel.id)
     """Comando para testar a geração de conteúdo."""
     if not autorizado(ctx):
         return await ctx.send("❌ Não autorizado.")
