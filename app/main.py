@@ -317,19 +317,7 @@ async def testar_conteudo(ctx):
     
     await send_content(ctx.channel)
 
-# --- Scheduled ---
-@tasks.loop(time=_time(hour=9, minute=0))
-async def daily_send():
-    """Tarefa agendada para envio diário."""
-    ch = bot.get_channel(DEST_CHANNEL_ID)
-    if ch:
-        await send_content(ch)
 
-@bot.event
-async def on_ready():
-    """Evento disparado quando o bot está pronto."""
-    print(f"✅ Bot online: {bot.user} | Guilds: {len(bot.guilds)}")
-    daily_send.start()
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
