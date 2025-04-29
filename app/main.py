@@ -146,116 +146,76 @@ def push_history(hist, sha):
 
 # --- Content Generation ---
 async def gerar_conteudo_com_ia():
-    import traceback  # só para garantir
+    """Gera uma palavra/frase estoica e grava no GitHub se for inédita."""
     print("🔍 [DEBUG] Início de gerar_conteudo_com_ia()")
+
     if not groq_client:
-        print("⚠️ [DEBUG] groq_client indisponível")
         return "⚠️ Serviço Groq indisponível."
-    
-    # 1) BUSCA HISTÓRICO
-    print("🔍 [DEBUG] Antes de fetch_history()")
+
+    # 1) Lê o histórico
     hist, sha = fetch_history()
-    print(f"🔄 [DEBUG] fetch_history retornou sha={sha!r} e hist={hist}")
-    
-    try:
-        # 2) GERA CONTEÚDO — tenta até encontrar algo inédito
-        prompt = (
-            "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
-            "Depois, forneça uma frase estoica em português com explicação.\n"
-            "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
+    print(f"🔄 [DEBUG] Histórico carregado – sha={sha}")
+
+    # 2) Prompt fixo
+    prompt = (
+        "Crie uma palavra em inglês (definição em português, exemplo em inglês e tradução).\n"
+        "Depois, forneça uma frase estoica em português com explicação.\n"
+        "Formato: uma linha por item: Palavra:..., Definição:..., Exemplo:..., Tradução:..., Frase estoica:..., Explicação:..."
+    )
+
+    MAX_TENTATIVAS = 5
+    palavra = frase = None
+    altered = False
+
+    # 3) Tenta até achar algo inédito
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        resp = groq_client.chat.completions.create(
+            model=LLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": "Você é um professor de inglês e estoico."},
+                {"role": "user",   "content": prompt}
+            ],
+            temperature=0.7
         )
+        content_text = resp.choices[0].message.content.strip()
+        print(f"🔁 [DEBUG] Tentativa {tentativa}:")
+        print(content_text, "\n")
 
-        MAX_TENTATIVAS = 5
-        palavra = frase = None
-        altered  = False
-
-        for tentativa in range(1, MAX_TENTATIVAS + 1):
-            # pede conteúdo à Groq
-            resp = groq_client.chat.completions.create(
-                model=LLAMA_MODEL,
-                messages=[
-                    {"role": "system", "content": "Você é um professor de inglês e estoico."},
-                    {"role": "user",   "content": prompt}
-                ],
-                temperature=0.7
-            )
-            content_text = resp.choices[0].message.content.strip()
-            print(f"🔁 [DEBUG] Tentativa {tentativa}: conteúdo bruto:\n{content_text}\n")
-
-            # -------- LIMPA E EXTRAI ----------
-            plain = content_text.replace("*", "")
-            m1 = re.search(r'(?im)^palavra:\s*(.+)$', plain, flags=re.MULTILINE)
-            m2 = re.search(r'(?im)^frase estoica:\s*(.+)$', plain, flags=re.MULTILINE)
-            palavra = m1.group(1).strip() if m1 else None
-            frase   = m2.group(1).strip() if m2 else None
-
-            lower_palavras = [p.lower() for p in hist.get("palavras", [])]
-            lower_frases   = [f.lower() for f in hist.get("frases", [])]
-
-            # se ao menos um é novo, sai do loop
-            if (palavra and palavra.lower() not in lower_palavras) or \
-               (frase and frase.lower() not in lower_frases):
-                altered = True
-                print("✅ [DEBUG] Conteúdo inédito encontrado")
-                break
-
-            print("🔁 [DEBUG] Repetido, pedindo novamente…")
-
-        # se não achou nada novo em 5 tentativas, altered permanece False
-        
-        # 3) Limpa todos os '*' e extrai com regex MULTILINE
-        print(f"✏️ [DEBUG] Conteúdo bruto gerado:\n{content_text}\n")
-
-        # remove todos os asteriscos
+        # — limpar markdown e extrair
         plain = content_text.replace("*", "")
-        print(f"🔍 [DEBUG] Conteúdo sem asteriscos (plain):\n{plain}\n")
-
-        # extrai 'palavra' e 'frase estoica' no modo MULTILINE
         m1 = re.search(r'(?im)^palavra:\s*(.+)$', plain, flags=re.MULTILINE)
         m2 = re.search(r'(?im)^frase estoica:\s*(.+)$', plain, flags=re.MULTILINE)
-
         palavra = m1.group(1).strip() if m1 else None
         frase   = m2.group(1).strip() if m2 else None
 
-        if palavra:
-            print(f"🔎 [DEBUG] palavra extraída: {palavra!r}")
-        else:
-            print("🔍 [DEBUG] palavra NÃO encontrada")
+        lower_palavras = [p.lower() for p in hist.get("palavras", [])]
+        lower_frases   = [f.lower() for f in hist.get("frases", [])]
 
-        if frase:
-            print(f"🔎 [DEBUG] frase extraída: {frase!r}")
-        else:
-            print("🔍 [DEBUG] frase NÃO encontrada")
+        if (palavra and palavra.lower() not in lower_palavras) or \
+           (frase and frase.lower() not in lower_frases):
+            altered = True
+            print("✅ [DEBUG] Conteúdo inédito encontrado")
+            break
 
-        # 4) Verifica alterações
-        altered = False
-        if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
-            hist.setdefault("palavras", []).append(palavra)
-            print(f"➕ [DEBUG] Nova palavra adicionada: {palavra!r}")
-            altered = True
-        else:
-            print("✔️ [DEBUG] Palavra repetida ou ausente")
-        
-        if frase and frase.lower() not in [f.lower() for f in hist.get("frases", [])]:
-            hist.setdefault("frases", []).append(frase)
-            print(f"➕ [DEBUG] Nova frase adicionada: {frase!r}")
-            altered = True
-        else:
-            print("✔️ [DEBUG] Frase repetida ou ausente")
-        
-        # 5) Salva somente se alterou
-        if altered:
-            print("💾 [DEBUG] Alterações detectadas, chamando push_history()")
-            saved = push_history(hist, sha)
-            print(f"💾 [DEBUG] push_history retornou {saved}")
-        else:
-            print("💾 [DEBUG] Sem alterações, não chama push_history()")
-    
-    except Exception as e:
-        print(f"❌ [DEBUG] Erro em gerar_conteudo_com_ia: {e}", traceback.format_exc())
-        return f"⚠️ Erro ao gerar conteúdo: {e}"
-    
+        print("🔁 [DEBUG] Repetido, tentando novamente…")
+
+    # 4) Se nada novo em 5 tentativas
+    if not altered:
+        print("🚫 [DEBUG] Não consegui novidade em 5 tentativas; nada será salvo.")
+        return content_text
+
+    # 5) Acrescenta ao histórico e grava
+    if palavra and palavra.lower() not in [p.lower() for p in hist.get("palavras", [])]:
+        hist.setdefault("palavras", []).append(palavra)
+
+    if frase and frase.lower() not in [f.lower() for f in hist.get("frases", [])]:
+        hist.setdefault("frases", []).append(frase)
+
+    saved = push_history(hist, sha)
+    print(f"💾 [DEBUG] push_history retornou {saved}")
+
     return content_text
+
 
 
 # --- Verificação anti-duplicação ---
