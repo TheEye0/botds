@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra Groq + SerpApi, com comandos ask, search e keep-alive HTTP.
+Integra Groq + SerpApi, com comandos ask, search, call, sair e keep-alive HTTP.
 """
 import os
 import re
@@ -51,8 +51,8 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # --- Helpers ---
 def autorizado(ctx):
     return (
-        (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID) or
-        (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
+        (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
+        or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
     )
 
 def chunk_text(text: str, limit: int = 2000):
@@ -60,6 +60,30 @@ def chunk_text(text: str, limit: int = 2000):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
 # --- Commands ---
+@bot.command()
+async def call(ctx):
+    """Entra no canal de voz do usuário."""
+    if not autorizado(ctx):
+        return await ctx.send("❌ Não autorizado ou serviço indisponível.")
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        return await ctx.send("❌ Você precisa estar em um canal de voz para usar este comando.")
+    channel = ctx.author.voice.channel
+    try:
+        await channel.connect()
+        await ctx.send(f"✅ Conectado ao canal de voz: **{channel.name}**")
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao conectar: {e}")
+
+@bot.command()
+async def sair(ctx):
+    """Sai do canal de voz."""
+    vc = ctx.voice_client
+    if vc and vc.is_connected():
+        await vc.disconnect()
+        await ctx.send("✅ Desconectado do canal de voz.")
+    else:
+        await ctx.send("❌ Não estou em nenhum canal de voz.")
+
 @bot.command()
 async def ask(ctx, *, pergunta: str):
     """Envia pergunta para IA e retorna resposta com contexto."""
@@ -69,7 +93,6 @@ async def ask(ctx, *, pergunta: str):
     hist_chan.append({"role": "user", "content": pergunta})
     messages = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
 
-    # Chama a API
     response = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
         messages=messages,
@@ -78,7 +101,6 @@ async def ask(ctx, *, pergunta: str):
     resp = response.choices[0].message.content
     hist_chan.append({"role": "assistant", "content": resp})
 
-    # Envia em chunks para não exceder 2000 chars
     for piece in chunk_text(resp):
         await ctx.send(piece)
 
