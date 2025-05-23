@@ -66,23 +66,12 @@ def autorizado(ctx):
 def chunk_text(text: str, limit: int = 2000):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
-# --- Audio Capture Sink ---
-from discord import sinks
+# --- Audio Capture (usando discord-ext-voice-recorder) ---
+from discord_voice_recorder import VoiceRecorder
 
-# --- Audio Capture Sink ---
-class PCMRecorder(sinks.RawDataSink):
-    """Audio sink que captura e armazena PCM48k mono for streaming."""
-    """Captura e armazena PCM16le mono 48k para envio."""
-    def __init__(self):
-        super().__init__()
-        self.buffer = bytearray()
-    def write(self, data):
-        # data.pcm contém PCM16le 48k mono
-        self.buffer.extend(data.pcm)
-    def read(self):
-        pcm = bytes(self.buffer)
-        self.buffer.clear()
-        return pcm
+# --- Audio Capture using discord_voice_recorder ---
+# VoiceRecorder fornece método read() para obter PCM48k
+
 
 # --- Streaming Handlers ---
 async def stream_audio_to_gemini(vc, session, recorder):
