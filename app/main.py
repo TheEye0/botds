@@ -67,7 +67,11 @@ def chunk_text(text: str, limit: int = 2000):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
 # --- Audio Capture Sink ---
-class PCMRecorder(discord.AudioSink):
+from discord import sinks
+
+# --- Audio Capture Sink ---
+class PCMRecorder(sinks.RawDataSink):
+    """Audio sink que captura e armazena PCM48k mono for streaming."""
     """Captura e armazena PCM16le mono 48k para envio."""
     def __init__(self):
         super().__init__()
@@ -132,7 +136,7 @@ async def call(ctx):
     await ctx.send(f"✅ Conectado em **{voice_channel.name}**")
 
     recorder = PCMRecorder()
-    vc.start_recording(recorder, lambda *args: None)
+    vc.start_recording(recorder)
 
     session = await genai.live.connect(
         model=GEMINI_MODEL,
