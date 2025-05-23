@@ -5,9 +5,8 @@ Integra Groq, SerpApi e Google Gemini Live API para voz em tempo real,
 comandos ask, search, call, sair e keep-alive HTTP.
 """
 import os
-import re
-import subprocess
 import asyncio
+import subprocess
 import traceback
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,10 +17,8 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from groq import Groq
 from serpapi import GoogleSearch
-import opuslib  # pip install opuslib
-
-# SDK Google Generative AI
-import google.generativeai as genai
+import opuslib               # pip install opuslib
+import google.generativeai as genai  # pip install google-generativeai
 
 # --- Environment ---
 load_dotenv()
@@ -58,13 +55,13 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
-groq_client   = Groq(api_key=GROQ_API_KEY)   if GROQ_API_KEY   else None
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # --- Helpers ---
 def autorizado(ctx):
     return (
-      (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
-      or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
+        (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
+        or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
     )
 
 def chunk_text(text: str, limit: int = 2000):
@@ -76,10 +73,12 @@ class PCMRecorder:
     def __init__(self):
         self.decoder = opuslib.Decoder(48000, 1)
         self.buffer = bytearray()
+
     def write(self, packet: discord.VoicePacket):
-        # packet.data contém bytes Opus
+        # packet.data são bytes Opus
         pcm = self.decoder.decode(packet.data, frame_size=960)  # ~20ms
         self.buffer.extend(pcm)
+
     def read(self) -> bytes:
         data = bytes(self.buffer)
         self.buffer.clear()
@@ -106,7 +105,9 @@ async def stream_audio_to_gemini(vc: discord.VoiceClient, session, recorder: PCM
     except Exception:
         traceback.print_exc()
     finally:
-        ff.stdin.close(); ff.stdout.close(); ff.wait()
+        ff.stdin.close()
+        ff.stdout.close()
+        ff.wait()
         await session.close()
 
 async def stream_gemini_to_discord(vc: discord.VoiceClient, session):
@@ -130,15 +131,14 @@ async def call(ctx):
         return await ctx.send("❌ Não autorizado.")
     if not GENAI_API_KEY:
         return await ctx.send("❌ GEMINI_API_KEY ausente.")
-    vc = ctx.voice_client
     if not ctx.author.voice or not ctx.author.voice.channel:
         return await ctx.send("❌ Você precisa estar em um canal de voz.")
     vc = await ctx.author.voice.channel.connect()
     await ctx.send(f"✅ Conectado em **{ctx.author.voice.channel.name}**")
-    # start listening
+
     recorder = PCMRecorder()
     vc.listen(recorder)
-    # abre sessão Gemini Live
+
     session = await genai.live.connect(
         model=GEMINI_MODEL,
         modalities=["audio"]
@@ -182,8 +182,8 @@ async def search(ctx, *, consulta: str):
     await ctx.send(f"🔍 Buscando: {consulta}")
     res = GoogleSearch({
         "q": consulta,
-        "hl":"pt-br","gl":"br","api_key":SERPAPI_KEY
-    }).get_dict().get("organic_results",[])[:3]
+        "hl": "pt-br", "gl": "br", "api_key": SERPAPI_KEY
+    }).get_dict().get("organic_results", [])[:3]
     snp = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in res) or "Nenhum resultado."
     summ = groq_client.chat.completions.create(
         model=LLAMA_MODEL,
