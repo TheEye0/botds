@@ -66,12 +66,8 @@ def autorizado(ctx):
 def chunk_text(text: str, limit: int = 2000):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
-# --- Audio Capture (usando discord-ext-voice-recorder) ---
+# --- Audio Capture com discord-voice-recorder ---
 from discord_voice_recorder import VoiceRecorder
-
-# --- Audio Capture using discord_voice_recorder ---
-# VoiceRecorder fornece método read() para obter PCM48k
-
 
 # --- Streaming Handlers ---
 async def stream_audio_to_gemini(vc, session, recorder):
@@ -124,8 +120,8 @@ async def call(ctx):
     vc = await voice_channel.connect()
     await ctx.send(f"✅ Conectado em **{voice_channel.name}**")
 
-    recorder = PCMRecorder()
-    vc.start_recording(recorder)
+    recorder = VoiceRecorder(vc)
+    recorder.start()
 
     session = await genai.live.connect(
         model=GEMINI_MODEL,
@@ -139,7 +135,7 @@ async def sair(ctx):
     """Sai do canal de voz."""
     vc = ctx.voice_client
     if vc and vc.is_connected():
-        vc.stop_recording(); await vc.disconnect()
+        recorder.stop(); await vc.disconnect()
         await ctx.send("✅ Sai do canal de voz.")
     else:
         await ctx.send("❌ Não estou em um canal de voz.")
