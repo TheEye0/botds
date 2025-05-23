@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import asyncio
+import traceback
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections import defaultdict, deque
@@ -17,8 +18,9 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from groq import Groq
 from serpapi import GoogleSearch
-from google import genai
-from google.genai import types
+# Correção de import para o SDK Google GenAI
+from google_genai import Client as GeminiClient
+from google_genai import types as genai_types
 
 # --- Environment ---
 load_dotenv()
@@ -38,11 +40,13 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"Bot online!")
+
 Thread(target=lambda: HTTPServer(("0.0.0.0", PORT), KeepAliveHandler).serve_forever(), daemon=True).start()
 
 # --- Discord Setup ---
@@ -53,12 +57,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+gemini_client = GeminiClient(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # --- Helpers ---
+
 def autorizado(ctx):
     return ((isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID)
             or (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID))
+
 
 def chunk_text(text: str, limit: int = 2000):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
@@ -69,9 +75,11 @@ class PCMRecorder(discord.AudioSink):
     def __init__(self):
         super().__init__()
         self.buffer = bytearray()
+
     def write(self, data):
         # data.pcm contém PCM16le 48k mono
         self.buffer.extend(data.pcm)
+
     def read(self):
         pcm = bytes(self.buffer)
         self.buffer.clear()
@@ -80,14 +88,13 @@ class PCMRecorder(discord.AudioSink):
 # --- Streaming Handlers ---
 async def stream_audio_to_gemini(vc, session, recorder):
     """Converte PCM48k para PCM16k e envia ao Gemini Live API."""
-    # Configura ffmpeg subprocess para resample
     ff = subprocess.Popen([
         "ffmpeg", "-f", "s16le", "-ar", "48000", "-ac", "1",
         "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1"
     ], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     try:
         while vc.is_connected():
-            pcm48 = recorder.read()  # coleta todo PCM48 capturado
+            pcm48 = recorder.read()
             if not pcm48:
                 await asyncio.sleep(0.1)
                 continue
@@ -95,7 +102,9 @@ async def stream_audio_to_gemini(vc, session, recorder):
             ff.stdin.flush()
             pcm16 = ff.stdout.read(3200)
             if pcm16:
-                session.send_realtime_input(audio=types.Blob(data=pcm16, mime_type="audio/pcm;rate=16000"))
+                session.send_realtime_input(
+                    audio=genai_types.Blob(data=pcm16, mime_type="audio/pcm;rate=16000")
+                )
     except Exception:
         traceback.print_exc()
     finally:
@@ -108,13 +117,11 @@ async def stream_gemini_to_discord(vc, session):
     """Recebe áudio do Gemini e toca no canal via FFmpegPCMAudio."""
     async for resp in session.receive():
         if hasattr(resp, 'audio'):
-            # salva PCM24k mono retornado
             with open("resp.pcm", "wb") as f:
                 f.write(resp.audio.data)
-            # converte e toca via ffmpeg
             source = discord.FFmpegPCMAudio(
                 "resp.pcm",
-                options="-f s16le -ar 24000 -ac 1"
+                options="-f s16le -ar 48000 -ac 1"
             )
             vc.play(source)
     await vc.disconnect()
@@ -154,24 +161,37 @@ async def sair(ctx):
 
 @bot.command()
 async def ask(ctx, *, pergunta: str):
+    """Envia pergunta para IA e retorna resposta com contexto."""
     if not autorizado(ctx) or not groq_client:
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
     h = conversas[ctx.channel.id]
     h.append({"role":"user","content":pergunta})
     msgs = [{"role":"system","content":"Você é um assistente prestativo."}] + list(h)
-    out = groq_client.chat.completions.create(model=LLAMA_MODEL,messages=msgs,temperature=0.7).choices[0].message.content
+    out = groq_client.chat.completions.create(
+        model=LLAMA_MODEL,
+        messages=msgs,
+        temperature=0.7
+    ).choices[0].message.content
     h.append({"role":"assistant","content":out})
     for piece in chunk_text(out):
         await ctx.send(piece)
 
 @bot.command()
 async def search(ctx, *, consulta: str):
+    """Busca na web com SerpApi e resume resultados."""
     if not autorizado(ctx) or not SERPAPI_KEY:
         return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
     await ctx.send(f"🔍 Buscando: {consulta}")
     res = GoogleSearch({"q":consulta,"hl":"pt-br","gl":"br","api_key":SERPAPI_KEY}).get_dict().get("organic_results",[])[:3]
     snp = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in res) or "Nenhum resultado."
-    summ = groq_client.chat.completions.create(model=LLAMA_MODEL,messages=[{"role":"system","content":"Resuma resultados."},{"role":"user","content":snp}],temperature=0.3).choices[0].message.content
+    summ = groq_client.chat.completions.create(
+        model=LLAMA_MODEL,
+        messages=[
+            {"role":"system","content":"Resuma resultados."},
+            {"role":"user","content":snp}
+        ],
+        temperature=0.3
+    ).choices[0].message.content
     for piece in chunk_text(summ):
         await ctx.send(piece)
 
