@@ -1,143 +1,165 @@
 # -*- coding: utf-8 -*-
 """
-main.py — BotDS Discord Bot
-OpenAI GPT-4o multimodal + SerpApi + Discord (imagem por attachment).
+Bot Discord - Metas Academia
+Armazena progresso por usuário, salva/atualiza em metas.json no GitHub via API.
 """
-
-import os
-import io
-import base64
+import os, json, datetime, base64, requests, traceback
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from collections import defaultdict, deque
-
+from collections import defaultdict
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-import openai
 
-from serpapi import GoogleSearch
-
-# --- Environment ---
+# ----- ENV/SETUP -----
 load_dotenv()
-DISCORD_TOKEN    = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
-SERPAPI_KEY      = os.getenv("SERPAPI_KEY")
-ALLOWED_GUILD_ID = int(os.getenv("ALLOWED_GUILD_ID", "0"))
-ALLOWED_USER_ID  = int(os.getenv("ALLOWED_USER_ID", "0"))
-PORT             = int(os.getenv("PORT", "10000"))
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO = os.getenv("GITHUB_REPO") # Ex: "TheEye0/botds"
+METAS_FILE = os.getenv("METAS_FILE", "metas.json")
+PORT = int(os.getenv("PORT", 10000))
 
-OPENAI_MODEL     = "gpt-4o-2024-11-20"
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-openai.api_key = OPENAI_API_KEY
+# ----- Github -----
+def metas_url():
+    return f"https://api.github.com/repos/{GITHUB_REPO}/contents/{METAS_FILE}"
 
-# --- Keep-alive HTTP Server ---
+def carregar_metas():
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    try:
+        r = requests.get(metas_url(), headers=headers, timeout=10)
+        if r.ok:
+            raw = base64.b64decode(r.json()["content"])
+            return json.loads(raw)
+    except Exception:
+        traceback.print_exc()
+    return {}
+
+def salvar_metas(metas: dict):
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    # Pega o SHA do último commit para update
+    r = requests.get(metas_url(), headers=headers)
+    sha = r.json().get("sha") if r.ok else None
+    content = base64.b64encode(json.dumps(metas, ensure_ascii=False, indent=2).encode()).decode()
+    data = {
+        "message": "update metas.json",
+        "content": content,
+        "branch": "main"
+    }
+    if sha: data["sha"] = sha
+    try:
+        r = requests.put(metas_url(), headers=headers, json=data, timeout=10)
+        if not r.ok:
+            print(f"Erro ao salvar metas: {r.text}")
+    except Exception:
+        traceback.print_exc()
+
+# ----- Funções -----
+def get_user_meta(metas, uid):
+    return metas.get(str(uid))
+
+def meta_status(meta):
+    hoje = datetime.date.today()
+    fim = datetime.date.fromisoformat(meta["data_final"])
+    feito = meta["feito"]
+    total = meta["total"]
+    dias_restantes = (fim - hoje).days
+    status = ""
+    if feito >= total:
+        status = f"🎉 Parabéns, meta CONCLUÍDA! ({feito}/{total})"
+    elif hoje > fim:
+        status = f"⏰ Meta ENCERRADA pelo prazo. Você fez {feito}/{total}."
+    else:
+        status = f"Progresso: {feito} de {total}. Dias restantes: {dias_restantes} (até {meta['data_final']})."
+    return status
+
+def remove_meta(metas, uid):
+    if str(uid) in metas:
+        del metas[str(uid)]
+
+# ----- Commands -----
+@bot.command()
+async def meta(ctx, total: int, data_final: str):
+    """Cadastra ou atualiza meta. Exemplo: !meta 24 2024-08-20"""
+    metas = carregar_metas()
+    try:
+        fim = datetime.date.fromisoformat(data_final)
+    except Exception:
+        return await ctx.send("❌ Data inválida. Use AAAA-MM-DD.")
+    metas[str(ctx.author.id)] = {
+        "total": total,
+        "feito": 0,
+        "data_final": data_final
+    }
+    salvar_metas(metas)
+    await ctx.send(f"✅ Meta registrada: {total} treinos até {data_final}.")
+
+@bot.command()
+async def pago(ctx):
+    """Registra 1 treino, mostra progresso e apaga meta se concluída ou expirada."""
+    metas = carregar_metas()
+    uid = str(ctx.author.id)
+    meta = get_user_meta(metas, uid)
+    if not meta:
+        return await ctx.send("Você não tem uma meta cadastrada. Use !meta.")
+    meta["feito"] += 1
+    hoje = datetime.date.today()
+    fim = datetime.date.fromisoformat(meta["data_final"])
+    total = meta["total"]
+    feito = meta["feito"]
+    status = ""
+    if feito >= total:
+        status = f"🎉 Parabéns! Você completou sua meta: {feito}/{total} treinos!"
+        remove_meta(metas, uid)
+    elif hoje > fim:
+        status = f"⏰ O prazo terminou. Você fez {feito}/{total}. Nova meta? (!meta)"
+        remove_meta(metas, uid)
+    else:
+        dias_restantes = (fim - hoje).days
+        status = f"Progresso: {feito}/{total} treinos. Dias restantes: {dias_restantes} (até {meta['data_final']})."
+        metas[uid] = meta  # Salva update
+    salvar_metas(metas)
+    await ctx.send(status)
+
+@bot.command()
+async def progresso(ctx):
+    """Mostra o progresso atual da sua meta."""
+    metas = carregar_metas()
+    meta = get_user_meta(metas, ctx.author.id)
+    if not meta:
+        return await ctx.send("Você não tem meta cadastrada. Use !meta.")
+    await ctx.send(meta_status(meta))
+
+@bot.command()
+async def resetmeta(ctx):
+    """Apaga a sua meta atual."""
+    metas = carregar_metas()
+    if str(ctx.author.id) in metas:
+        remove_meta(metas, ctx.author.id)
+        salvar_metas(metas)
+        await ctx.send("Meta removida!")
+    else:
+        await ctx.send("Você não tem meta ativa para remover.")
+
+# ----- Keep-alive HTTP -----
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"Bot online!")
 
 Thread(target=lambda: HTTPServer(("0.0.0.0", PORT), KeepAliveHandler).serve_forever(), daemon=True).start()
 
-# --- Discord Setup ---
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-conversas = defaultdict(lambda: deque(maxlen=10))
-
-def autorizado(ctx):
-    return (
-        (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID) or
-        (ctx.guild and ctx.guild.id == ALLOWED_GUILD_ID)
-    )
-
-def chunk_text(text: str, limit: int = 2000):
-    """Divide texto em pedaços <= limit caracteres."""
-    return [text[i:i+limit] for i in range(0, len(text), limit)]
-
-# --- Commands ---
-
-@bot.command()
-async def ask(ctx, *, pergunta: str = None):
-    """Envia pergunta (texto e/ou imagem) para a OpenAI e retorna a resposta."""
-    if not autorizado(ctx):
-        return await ctx.send("❌ Não autorizado ou serviço indisponível.")
-
-    # Monta contexto da conversa
-    hist_chan = conversas[ctx.channel.id]
-    if pergunta:
-        hist_chan.append({"role": "user", "content": pergunta})
-
-    # Monta mensagem multimodal
-    contents = []
-    if pergunta:
-        contents.append({"type": "text", "text": pergunta})
-    if ctx.message.attachments:
-        attachment = ctx.message.attachments[0]
-        if attachment.content_type and attachment.content_type.startswith("image/"):
-            img_bytes = await attachment.read()
-            img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-            data_url = f"data:{attachment.content_type};base64,{img_base64}"
-            contents.append({"type": "image_url", "image_url": {"url": data_url}})
-        else:
-            await ctx.send("⚠️ O arquivo anexado não é uma imagem suportada.")
-            return
-
-    # Se não for multimodal, envia como só texto
-    if not contents:
-        contents = [{"type": "text", "text": pergunta if pergunta else "Responda."}]
-
-    # Chama a OpenAI API
-    try:
-        completion = openai.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": contents}],
-            max_tokens=2048,
-        )
-        resp = completion.choices[0].message.content
-        hist_chan.append({"role": "assistant", "content": resp})
-        for piece in chunk_text(resp):
-            await ctx.send(piece)
-    except Exception as e:
-        await ctx.send(f"❌ Erro: {e}")
-
-@bot.command()
-async def search(ctx, *, consulta: str):
-    """Busca na web com SerpApi e resume resultados."""
-    if not autorizado(ctx) or not SERPAPI_KEY:
-        return await ctx.send("❌ Não autorizado ou SERPAPI_KEY ausente.")
-    await ctx.send(f"🔍 Buscando: {consulta}")
-
-    results = GoogleSearch({
-        "q": consulta,
-        "hl": "pt-br",
-        "gl": "br",
-        "api_key": SERPAPI_KEY
-    }).get_dict().get("organic_results", [])[:3]
-
-    snippet = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
-    summary = openai.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": "Resuma resultados em português."},
-            {"role": "user", "content": snippet}
-        ],
-        temperature=0.3
-    ).choices[0].message.content
-
-    for piece in chunk_text(summary):
-        await ctx.send(piece)
-
+# ----- Bot Ready -----
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online: {bot.user} | Guilds: {len(bot.guilds)}")
+    print(f"Bot online: {bot.user} | Comandos: !meta, !pago, !progresso, !resetmeta")
 
-# --- Main ---
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
