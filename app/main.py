@@ -23,7 +23,7 @@ SERPAPI_KEY      = os.getenv("SERPAPI_KEY")
 ALLOWED_GUILD_ID = int(os.getenv("ALLOWED_GUILD_ID", "0"))
 ALLOWED_USER_ID  = int(os.getenv("ALLOWED_USER_ID", "0"))
 PORT             = int(os.getenv("PORT", "10000"))
-OPENAI_MODEL     = "gpt-4o"
+OPENAI_MODEL     = "gpt-4.1-mini-2025-04-14"
 
 # --- Keep-alive HTTP Server ---
 class KeepAliveHandler(BaseHTTPRequestHandler):
