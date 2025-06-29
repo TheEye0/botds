@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra Groq + SerpApi, com comandos ask, search e keep-alive HTTP.
+Agora com OpenAI GPT-4o (não Groq), comandos ask, search e keep-alive HTTP.
 """
 import os
 import re
@@ -12,18 +12,18 @@ from collections import defaultdict, deque
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from groq import Groq
+import openai
 from serpapi import GoogleSearch
 
 # --- Environment ---
 load_dotenv()
 DISCORD_TOKEN    = os.getenv("DISCORD_TOKEN")
-GROQ_API_KEY     = os.getenv("GROQ_API_KEY")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
 SERPAPI_KEY      = os.getenv("SERPAPI_KEY")
 ALLOWED_GUILD_ID = int(os.getenv("ALLOWED_GUILD_ID", "0"))
 ALLOWED_USER_ID  = int(os.getenv("ALLOWED_USER_ID", "0"))
 PORT             = int(os.getenv("PORT", "10000"))
-LLAMA_MODEL      = os.getenv("LLAMA_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+OPENAI_MODEL     = "gpt-4o"
 
 # --- Keep-alive HTTP Server ---
 class KeepAliveHandler(BaseHTTPRequestHandler):
@@ -46,7 +46,8 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+# Configura OpenAI
+openai.api_key = OPENAI_API_KEY
 
 # --- Helpers ---
 def autorizado(ctx):
@@ -62,16 +63,16 @@ def chunk_text(text: str, limit: int = 2000):
 # --- Commands ---
 @bot.command()
 async def ask(ctx, *, pergunta: str):
-    """Envia pergunta para IA e retorna resposta com contexto."""
-    if not autorizado(ctx) or not groq_client:
+    """Envia pergunta para IA OpenAI GPT-4o e retorna resposta com contexto."""
+    if not autorizado(ctx) or not openai.api_key:
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
     hist_chan = conversas[ctx.channel.id]
     hist_chan.append({"role": "user", "content": pergunta})
     messages = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
 
-    # Chama a API
-    response = groq_client.chat.completions.create(
-        model=LLAMA_MODEL,
+    # Chama a API OpenAI
+    response = openai.chat.completions.create(
+        model=OPENAI_MODEL,
         messages=messages,
         temperature=0.7
     )
@@ -97,8 +98,8 @@ async def search(ctx, *, consulta: str):
     }).get_dict().get("organic_results", [])[:3]
 
     snippet = "\n\n".join(f"**{r['title']}**: {r['snippet']}" for r in results) or "Nenhum resultado."
-    summary = groq_client.chat.completions.create(
-        model=LLAMA_MODEL,
+    summary = openai.chat.completions.create(
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": "Resuma resultados."},
             {"role": "user", "content": snippet}
