@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Integra OpenAI GPT-4o multimodal + SerpApi + Discord.
-Comando !ask suporta imagem via attachment.
+OpenAI GPT-4o multimodal + SerpApi + Discord (imagem por attachment).
 """
 
 import os
 import io
+import base64
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections import defaultdict, deque
@@ -75,11 +75,6 @@ async def ask(ctx, *, pergunta: str = None):
         hist_chan.append({"role": "user", "content": pergunta})
 
     # Monta mensagem multimodal
-    messages = [{"role": "system", "content": "Você é um assistente útil e detalhado, respondendo em português."}]
-    for m in hist_chan:
-        messages.append(m)
-
-    # Verifica se há attachment de imagem
     contents = []
     if pergunta:
         contents.append({"type": "text", "text": pergunta})
@@ -87,7 +82,9 @@ async def ask(ctx, *, pergunta: str = None):
         attachment = ctx.message.attachments[0]
         if attachment.content_type and attachment.content_type.startswith("image/"):
             img_bytes = await attachment.read()
-            contents.append({"type": "image_url", "image_url": {"url": f"data:{attachment.content_type};base64,{io.BytesIO(img_bytes).getvalue().hex()}"}})
+            img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+            data_url = f"data:{attachment.content_type};base64,{img_base64}"
+            contents.append({"type": "image_url", "image_url": {"url": data_url}})
         else:
             await ctx.send("⚠️ O arquivo anexado não é uma imagem suportada.")
             return
