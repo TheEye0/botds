@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 main.py — BotDS Discord Bot
-Agora com OpenAI GPT-4o (não Groq), comandos ask, search e keep-alive HTTP.
+Integra OpenAI GPT-4o multimodal + SerpApi + Discord.
+Comando !ask suporta imagem via attachment.
 """
+
 import os
-import re
+import io
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections import defaultdict, deque
@@ -13,6 +15,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import openai
+
 from serpapi import GoogleSearch
 
 # --- Environment ---
@@ -23,7 +26,10 @@ SERPAPI_KEY      = os.getenv("SERPAPI_KEY")
 ALLOWED_GUILD_ID = int(os.getenv("ALLOWED_GUILD_ID", "0"))
 ALLOWED_USER_ID  = int(os.getenv("ALLOWED_USER_ID", "0"))
 PORT             = int(os.getenv("PORT", "10000"))
+
 OPENAI_MODEL     = "gpt-4o-2024-11-20"
+
+openai.api_key = OPENAI_API_KEY
 
 # --- Keep-alive HTTP Server ---
 class KeepAliveHandler(BaseHTTPRequestHandler):
@@ -31,7 +37,6 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -46,10 +51,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 conversas = defaultdict(lambda: deque(maxlen=10))
 
-# Configura OpenAI
-openai.api_key = OPENAI_API_KEY
-
-# --- Helpers ---
 def autorizado(ctx):
     return (
         (isinstance(ctx.channel, discord.DMChannel) and ctx.author.id == ALLOWED_USER_ID) or
@@ -61,27 +62,53 @@ def chunk_text(text: str, limit: int = 2000):
     return [text[i:i+limit] for i in range(0, len(text), limit)]
 
 # --- Commands ---
+
 @bot.command()
-async def ask(ctx, *, pergunta: str):
-    """Envia pergunta para IA OpenAI GPT-4o e retorna resposta com contexto."""
-    if not autorizado(ctx) or not openai.api_key:
+async def ask(ctx, *, pergunta: str = None):
+    """Envia pergunta (texto e/ou imagem) para a OpenAI e retorna a resposta."""
+    if not autorizado(ctx):
         return await ctx.send("❌ Não autorizado ou serviço indisponível.")
+
+    # Monta contexto da conversa
     hist_chan = conversas[ctx.channel.id]
-    hist_chan.append({"role": "user", "content": pergunta})
-    messages = [{"role": "system", "content": "Você é um assistente prestativo."}] + list(hist_chan)
+    if pergunta:
+        hist_chan.append({"role": "user", "content": pergunta})
 
-    # Chama a API OpenAI
-    response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=messages,
-        temperature=0.7
-    )
-    resp = response.choices[0].message.content
-    hist_chan.append({"role": "assistant", "content": resp})
+    # Monta mensagem multimodal
+    messages = [{"role": "system", "content": "Você é um assistente útil e detalhado, respondendo em português."}]
+    for m in hist_chan:
+        messages.append(m)
 
-    # Envia em chunks para não exceder 2000 chars
-    for piece in chunk_text(resp):
-        await ctx.send(piece)
+    # Verifica se há attachment de imagem
+    contents = []
+    if pergunta:
+        contents.append({"type": "text", "text": pergunta})
+    if ctx.message.attachments:
+        attachment = ctx.message.attachments[0]
+        if attachment.content_type and attachment.content_type.startswith("image/"):
+            img_bytes = await attachment.read()
+            contents.append({"type": "image_url", "image_url": {"url": f"data:{attachment.content_type};base64,{io.BytesIO(img_bytes).getvalue().hex()}"}})
+        else:
+            await ctx.send("⚠️ O arquivo anexado não é uma imagem suportada.")
+            return
+
+    # Se não for multimodal, envia como só texto
+    if not contents:
+        contents = [{"type": "text", "text": pergunta if pergunta else "Responda."}]
+
+    # Chama a OpenAI API
+    try:
+        completion = openai.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": contents}],
+            max_tokens=2048,
+        )
+        resp = completion.choices[0].message.content
+        hist_chan.append({"role": "assistant", "content": resp})
+        for piece in chunk_text(resp):
+            await ctx.send(piece)
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
 
 @bot.command()
 async def search(ctx, *, consulta: str):
@@ -101,7 +128,7 @@ async def search(ctx, *, consulta: str):
     summary = openai.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
-            {"role": "system", "content": "Resuma resultados."},
+            {"role": "system", "content": "Resuma resultados em português."},
             {"role": "user", "content": snippet}
         ],
         temperature=0.3
@@ -110,7 +137,6 @@ async def search(ctx, *, consulta: str):
     for piece in chunk_text(summary):
         await ctx.send(piece)
 
-# --- Events ---
 @bot.event
 async def on_ready():
     print(f"✅ Bot online: {bot.user} | Guilds: {len(bot.guilds)}")
